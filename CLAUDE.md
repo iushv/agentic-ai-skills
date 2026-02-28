@@ -2,6 +2,15 @@
 
 @AGENTS.md
 
+## Plugin Format
+
+This package follows Claude Code's **plugin directory structure**:
+- Skills live at `skills/*/SKILL.md` (plugin format: `<plugin>/skills/<name>/SKILL.md`)
+- Usable directly via `claude --plugin-dir ./agentic-ai-skills`
+- `sync-rules.sh` mirrors skills to `<root>/.claude/skills/` for project-level discovery
+
+**Root CLAUDE.md is never generated or modified by any script in this package.**
+
 ## Claude-Specific Configuration
 
 ### Model IDs

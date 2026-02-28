@@ -1,7 +1,8 @@
 # Agentic AI Skills
 
-Production rules and reusable skills for building agentic AI systems. Works across
-**Claude Code, Cursor, GitHub Copilot, OpenAI Codex, Windsurf, and Aider**.
+Production rules and reusable skills for building agentic AI systems. Works as a
+**contextual plugin** across Claude Code, Cursor, GitHub Copilot, OpenAI Codex,
+Windsurf, and Aider — active only when you're building agentic AI.
 
 ## What's Inside
 
@@ -9,12 +10,12 @@ Production rules and reusable skills for building agentic AI systems. Works acro
   observability, cost, testing).
 - **5 Skills** — Reusable workflows for design review, scaffolding, tool design,
   debugging, and guardrail setup.
-- **Auto-sync** — One script generates rule files for every supported tool.
+- **Auto-sync** — One script generates contextual rule files for every supported tool.
 
 ## Quick Start
 
 ```bash
-# Clone or copy the agentic-ai-skills/ directory into your project root
+# Copy the agentic-ai-skills/ directory into your project
 cp -r agentic-ai-skills/ your-project/agentic-ai-skills/
 
 # Generate tool-specific rule files at your project root
@@ -24,55 +25,74 @@ bash your-project/agentic-ai-skills/scripts/sync-rules.sh
 bash your-project/agentic-ai-skills/validate.sh
 ```
 
-The sync script auto-detects the project root (parent of `agentic-ai-skills/`) and
-writes generated files there (e.g., `.cursor/rules/`, `.github/`, `.windsurfrules`)
-so each tool discovers them at the expected location.
-
 ## Installation by Tool
 
 ### Claude Code
 
-Claude Code reads `CLAUDE.md` and `skills/*/SKILL.md` natively.
+Skills use the **plugin directory format** (`<plugin>/skills/<name>/SKILL.md`).
 
-1. Copy `agentic-ai-skills/` into your project root.
-2. Claude Code auto-discovers `CLAUDE.md` (which imports `AGENTS.md` via `@AGENTS.md`).
-3. Skills are available as `/agentic-design-review`, `/agent-scaffold`, etc.
+**Auto-discovery** (default): Skills are auto-discovered when working inside the
+`agentic-ai-skills/` directory. `CLAUDE.md` is lazy-loaded in the same context —
+no root pollution.
+
+**Project-level mirror**: Run `sync-rules.sh --tools claude` to mirror skills to
+`<root>/.claude/skills/*/SKILL.md` for project-wide discovery.
+
+**Plugin mode**: Use directly as a plugin:
+```bash
+claude --plugin-dir ./agentic-ai-skills
+```
+
+**Opt-in always-on**: Add `@agentic-ai-skills/AGENTS.md` to your root `CLAUDE.md`
+if you want rules active in every session.
+
+> This package **never generates or modifies** your root `CLAUDE.md`.
 
 ### Cursor
 
-Cursor reads `.cursor/rules/*.mdc` files at the repo root.
+Rules use `alwaysApply: false` (**Apply Intelligently** mode). Cursor's model reads
+the description and decides when to include the rules based on your current task.
 
-1. Copy `agentic-ai-skills/` into your project root.
-2. Run `bash agentic-ai-skills/scripts/sync-rules.sh`.
-3. The rules appear in `<project-root>/.cursor/rules/agentic-ai.mdc` (always-apply).
+```bash
+bash agentic-ai-skills/scripts/sync-rules.sh --tools cursor
+# Generates: <root>/.cursor/rules/agentic-ai.mdc
+```
 
-### GitHub Copilot
-
-Copilot reads `.github/copilot-instructions.md` at the repo root.
-
-1. Copy `agentic-ai-skills/` into your project root.
-2. Run `bash agentic-ai-skills/scripts/sync-rules.sh`.
-3. The rules appear in `<project-root>/.github/copilot-instructions.md`.
-
-### OpenAI Codex
-
-Codex reads `AGENTS.md` and `skills/*/SKILL.md` natively (same format as Claude Code).
-
-1. Copy `agentic-ai-skills/` into your project root.
-2. Run `bash agentic-ai-skills/scripts/sync-rules.sh`.
-3. Codex reads `<project-root>/.codex/AGENTS.md` and the skill files.
+You can also `@`-reference the rule manually in any Cursor chat.
 
 ### Windsurf
 
-Windsurf reads `.windsurfrules` at the repo root.
+Rules use `trigger: model_decision` — Cascade applies them only when relevant to
+your current task. Not injected into every conversation.
 
-1. Copy `agentic-ai-skills/` into your project root.
-2. Run `bash agentic-ai-skills/scripts/sync-rules.sh`.
-3. The rules appear in `<project-root>/.windsurfrules`.
+```bash
+bash agentic-ai-skills/scripts/sync-rules.sh --tools windsurf
+# Generates: <root>/.windsurf/rules/agentic-ai.md
+```
+
+### GitHub Copilot
+
+Instructions are scoped via `applyTo` glob to agent-related filenames. Only activates
+when editing files matching `**/agent*`, `**/tool*`, `**/guardrail*`, etc.
+
+```bash
+bash agentic-ai-skills/scripts/sync-rules.sh --tools copilot
+# Generates: <root>/.github/instructions/agentic-ai.instructions.md
+```
+
+### OpenAI Codex
+
+Skills are mirrored to `<root>/.agents/skills/*/SKILL.md` (byte-identical copies).
+Codex auto-discovers them via lazy metadata-first loading.
+
+```bash
+bash agentic-ai-skills/scripts/sync-rules.sh --tools codex
+# Generates: <root>/.agents/skills/*/SKILL.md
+```
 
 ### Aider
 
-Aider reads any markdown file passed via `--read`.
+Manual only — Aider has no plugin system.
 
 ```bash
 aider --read agentic-ai-skills/AGENTS.md
@@ -100,43 +120,60 @@ read:
 `AGENTS.md` is the single source of truth. After editing it:
 
 ```bash
-# Regenerate all tool-specific files (writes to project root)
+# Regenerate all tool-specific files
 bash agentic-ai-skills/scripts/sync-rules.sh
+
+# Regenerate only specific tools
+bash agentic-ai-skills/scripts/sync-rules.sh --tools cursor,codex
 
 # Verify parity (useful in CI)
 bash agentic-ai-skills/scripts/sync-rules.sh --check
 
+# Scoped check
+bash agentic-ai-skills/scripts/sync-rules.sh --tools cursor --check
+
 # Run full validation suite
 bash agentic-ai-skills/validate.sh
+
+# Scoped validation
+bash agentic-ai-skills/validate.sh --tools cursor
+
+# Clean up stale generated files from old format
+bash agentic-ai-skills/scripts/sync-rules.sh --clean-stale
 ```
 
 ### What `sync-rules.sh` generates
 
-| Source | Target (at project root) | Tool |
-|--------|--------------------------|------|
-| `AGENTS.md` | `<root>/.cursor/rules/agentic-ai.mdc` | Cursor |
-| `AGENTS.md` | `<root>/.github/copilot-instructions.md` | GitHub Copilot |
-| `AGENTS.md` | `<root>/.windsurfrules` | Windsurf |
-| `AGENTS.md` | `<root>/.codex/AGENTS.md` | OpenAI Codex |
+| Source | Target (at project root) | Tool | Activation |
+|--------|--------------------------|------|------------|
+| `skills/*/SKILL.md` | `<root>/.claude/skills/*/SKILL.md` | Claude Code | Auto-discovered, lazy-loaded |
+| `skills/*/SKILL.md` | `<root>/.agents/skills/*/SKILL.md` | Codex | Lazy metadata-first |
+| `AGENTS.md` | `<root>/.cursor/rules/agentic-ai.mdc` | Cursor | `alwaysApply: false` (model decides) |
+| `AGENTS.md` | `<root>/.windsurf/rules/agentic-ai.md` | Windsurf | `trigger: model_decision` |
+| `AGENTS.md` | `<root>/.github/instructions/agentic-ai.instructions.md` | Copilot | `applyTo` glob |
 
 ### What `validate.sh` checks
 
-- `AGENTS.md` ≤ 180 lines.
-- Each `SKILL.md` ≤ 500 lines.
-- SKILL.md frontmatter has `name` and `description`.
-- No absolute local paths (macOS, Linux, or Windows home directories) in any file.
-- Generated files match canonical source.
+1. `AGENTS.md` ≤ 180 lines
+2. Each `SKILL.md` ≤ 500 lines
+3. SKILL.md frontmatter has `name` and `description`
+4. No absolute local paths in any file
+5. Generated files match canonical source
+6. Skill mirrors are byte-identical
+7. Mirror frontmatter integrity (starts with `---`)
+8. Generated rule frontmatter schema (tool-specific keys)
+9. CLAUDE.md safety audit (sync script never references root CLAUDE.md)
 
 ## Project Structure
 
 ```
 your-project/
-├── agentic-ai-skills/                       # The skills package
+├── agentic-ai-skills/                       # The skills package (plugin format)
 │   ├── README.md
 │   ├── AGENTS.md                            # Canonical rules (edit this)
 │   ├── CLAUDE.md                            # Claude Code project memory
 │   ├── skills/
-│   │   ├── agentic-design-review/SKILL.md
+│   │   ├── agentic-design-review/SKILL.md   # Canonical skill sources
 │   │   ├── agent-scaffold/SKILL.md
 │   │   ├── tool-schema-design/SKILL.md
 │   │   ├── agent-debug/SKILL.md
@@ -144,8 +181,9 @@ your-project/
 │   ├── scripts/sync-rules.sh               # Generates tool-specific files
 │   └── validate.sh                          # Pre-publish checks
 │
-├── .cursor/rules/agentic-ai.mdc            # Generated at project root
-├── .github/copilot-instructions.md          # Generated at project root
-├── .windsurfrules                           # Generated at project root
-└── .codex/AGENTS.md                         # Generated at project root
+├── .claude/skills/*/SKILL.md                # Mirrors (Claude Code discovery)
+├── .agents/skills/*/SKILL.md                # Mirrors (Codex discovery)
+├── .cursor/rules/agentic-ai.mdc            # Generated (contextual)
+├── .windsurf/rules/agentic-ai.md           # Generated (contextual)
+└── .github/instructions/agentic-ai.instructions.md  # Generated (scoped)
 ```
