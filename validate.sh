@@ -35,20 +35,42 @@ while IFS= read -r skill_file; do
   fi
 done < <(find "$ROOT_DIR/skills" -name "SKILL.md" -type f 2>/dev/null)
 
-# --- Check 3: SKILL.md frontmatter has name and description ---
+# --- Check 3: SKILL.md frontmatter has name and description (valid YAML) ---
 echo "[3/5] SKILL.md frontmatter validation"
 while IFS= read -r skill_file; do
   SKILL_NAME="$(basename "$(dirname "$skill_file")")"
-  # Extract YAML frontmatter between --- delimiters
-  FRONTMATTER="$(sed -n '/^---$/,/^---$/p' "$skill_file" | head -20)"
-  if echo "$FRONTMATTER" | grep -q "^name:"; then
-    if echo "$FRONTMATTER" | grep -q "^description:"; then
-      pass "$SKILL_NAME/SKILL.md has name and description"
-    else
-      fail "$SKILL_NAME/SKILL.md missing 'description' in frontmatter"
-    fi
+
+  # File must start with --- on line 1
+  if [ "$(head -1 "$skill_file")" != "---" ]; then
+    fail "$SKILL_NAME/SKILL.md does not start with --- (no frontmatter)"
+    continue
+  fi
+
+  # Extract lines between first and second --- (excluding delimiters)
+  FRONTMATTER="$(sed -n '2,/^---$/{ /^---$/d; p; }' "$skill_file")"
+
+  # Must have a closing ---
+  if ! sed -n '2,$p' "$skill_file" | grep -qm1 "^---$"; then
+    fail "$SKILL_NAME/SKILL.md frontmatter has no closing ---"
+    continue
+  fi
+
+  # Every non-blank line must match "key: value" pattern (basic YAML check)
+  BAD_LINES="$(echo "$FRONTMATTER" | grep -vnE '^$|^[a-zA-Z_][a-zA-Z0-9_-]*:' || true)"
+  if [ -n "$BAD_LINES" ]; then
+    fail "$SKILL_NAME/SKILL.md frontmatter has malformed YAML: $BAD_LINES"
+    continue
+  fi
+
+  # Check required keys
+  HAS_NAME=0; HAS_DESC=0
+  echo "$FRONTMATTER" | grep -q "^name:" && HAS_NAME=1
+  echo "$FRONTMATTER" | grep -q "^description:" && HAS_DESC=1
+  if [ "$HAS_NAME" -eq 1 ] && [ "$HAS_DESC" -eq 1 ]; then
+    pass "$SKILL_NAME/SKILL.md has valid frontmatter with name and description"
   else
-    fail "$SKILL_NAME/SKILL.md missing 'name' in frontmatter"
+    [ "$HAS_NAME" -eq 0 ] && fail "$SKILL_NAME/SKILL.md missing 'name' in frontmatter"
+    [ "$HAS_DESC" -eq 0 ] && fail "$SKILL_NAME/SKILL.md missing 'description' in frontmatter"
   fi
 done < <(find "$ROOT_DIR/skills" -name "SKILL.md" -type f 2>/dev/null)
 
@@ -57,9 +79,9 @@ echo "[4/5] No local paths"
 LOCAL_PATH_REGEX='(/Users/|/home/|C:\\)'
 FOUND_PATHS=0
 while IFS= read -r file; do
-  # Skip validation scripts, sync scripts, and README (which documents the regex)
+  # Skip validation scripts and sync scripts (they contain the regex itself)
   case "$file" in
-    "$ROOT_DIR/validate.sh"|"$ROOT_DIR/scripts/"*|"$ROOT_DIR/README.md") continue ;;
+    "$ROOT_DIR/validate.sh"|"$ROOT_DIR/scripts/"*) continue ;;
   esac
   if grep -qE "$LOCAL_PATH_REGEX" "$file" 2>/dev/null; then
     fail "Local path found in $(basename "$file"): $(grep -nE "$LOCAL_PATH_REGEX" "$file" | head -1)"

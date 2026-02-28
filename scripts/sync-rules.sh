@@ -5,8 +5,16 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-CANONICAL="$ROOT_DIR/AGENTS.md"
+PKG_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+CANONICAL="$PKG_DIR/AGENTS.md"
+
+# Generated files go to the consuming project root, not the package subdirectory.
+# If the package lives at <repo>/agentic-ai-skills/, outputs land at <repo>/.
+# If the package IS the repo root, outputs stay at root.
+PROJECT_ROOT="$(cd "$PKG_DIR/.." && pwd)"
+if [ ! -d "$PROJECT_ROOT/.git" ] && [ -d "$PKG_DIR/.git" ]; then
+  PROJECT_ROOT="$PKG_DIR"
+fi
 
 if [ ! -f "$CANONICAL" ]; then
   echo "ERROR: $CANONICAL not found" >&2
@@ -52,25 +60,24 @@ generate() {
 # --- Target 1: .cursor/rules/agentic-ai.mdc ---
 CURSOR_HEADER="---
 description: Agentic AI production rules
-globs:
 alwaysApply: true
 ---"
-generate "$ROOT_DIR/.cursor/rules/agentic-ai.mdc" "$CURSOR_HEADER"
+generate "$PROJECT_ROOT/.cursor/rules/agentic-ai.mdc" "$CURSOR_HEADER"
 
 # --- Target 2: .github/copilot-instructions.md ---
 COPILOT_HEADER="<!-- GitHub Copilot Instructions — auto-generated from AGENTS.md -->
 <!-- Do not edit directly. Run scripts/sync-rules.sh to regenerate. -->"
-generate "$ROOT_DIR/.github/copilot-instructions.md" "$COPILOT_HEADER"
+generate "$PROJECT_ROOT/.github/copilot-instructions.md" "$COPILOT_HEADER"
 
 # --- Target 3: .windsurfrules ---
 WINDSURF_HEADER="# Windsurf Rules — auto-generated from AGENTS.md
 # Do not edit directly. Run scripts/sync-rules.sh to regenerate."
-generate "$ROOT_DIR/.windsurfrules" "$WINDSURF_HEADER"
+generate "$PROJECT_ROOT/.windsurfrules" "$WINDSURF_HEADER"
 
 # --- Target 4: .codex/AGENTS.md ---
 CODEX_HEADER="<!-- Auto-generated from AGENTS.md — do not edit directly. -->
 <!-- Run scripts/sync-rules.sh to regenerate. -->"
-generate "$ROOT_DIR/.codex/AGENTS.md" "$CODEX_HEADER"
+generate "$PROJECT_ROOT/.codex/AGENTS.md" "$CODEX_HEADER"
 
 if [ "$MODE" = "check" ]; then
   if [ "$ERRORS" -gt 0 ]; then
