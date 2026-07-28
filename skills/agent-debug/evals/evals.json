@@ -1,0 +1,41 @@
+{
+  "skill_name": "agent-debug",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "My agent keeps hitting max_iterations. Looking at the trace it calls search_docs with the exact same query eight times in a row, and the tool returns the same 40KB blob every time.",
+      "expected_output": "A debug report categorising this as a loop, attributing it to unhelpful tool output, and prescribing output shaping plus a stop condition.",
+      "expectations": [
+        "The report categorises the failure as a loop",
+        "The root cause names the tool returning unhelpful or unchanging output",
+        "The fix includes shaping or truncating the tool output",
+        "The report cites the repeated identical tool calls as its evidence",
+        "A prevention step is included, such as a regression test or an alert"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Costs jumped from about 4 cents a run to over 2 dollars. Nothing changed in the prompt. The traces show token counts spiking right after tool calls.",
+      "expected_output": "A debug report categorising this as a budget failure caused by large tool outputs, with truncation and caching as fixes.",
+      "expectations": [
+        "The report categorises the failure as a budget problem",
+        "The root cause identifies large tool outputs entering the context",
+        "The fix recommends truncating tool output at a specific character limit",
+        "The report recommends enforcing max_cost_usd before the LLM call",
+        "A cost-spike alert is recommended as prevention"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "The agent confidently told a customer their order shipped Tuesday. The tool result clearly says the order is still pending. No errors anywhere in the logs.",
+      "expected_output": "A debug report categorising this as hallucination, tracing it to a missing grounding check, and prescribing an output guardrail.",
+      "expectations": [
+        "The report categorises the failure as hallucination rather than a silent failure or provider error",
+        "The root cause identifies the absence of a grounding check against tool results",
+        "The fix adds an output guardrail that validates claims against tool output",
+        "The report notes that the absence of errors is consistent with this category rather than ruling it out",
+        "A golden-trajectory eval covering this case is recommended as prevention"
+      ]
+    }
+  ]
+}

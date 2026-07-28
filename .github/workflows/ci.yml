@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  validate:
+    name: Validate skills and generated rules
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check scripts are executable and parse
+        run: |
+          bash -n scripts/sync-rules.sh
+          bash -n validate.sh
+
+      - name: Generate tool-specific rule files
+        run: bash scripts/sync-rules.sh
+
+      - name: Verify generated files are in sync
+        run: bash scripts/sync-rules.sh --check
+
+      - name: Run validation suite
+        run: bash validate.sh
+
+  manifests:
+    name: Validate plugin manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse JSON manifests
+        run: |
+          python3 -c "import json,sys; json.load(open('.claude-plugin/plugin.json'))"
+          python3 -c "import json,sys; json.load(open('.claude-plugin/marketplace.json'))"
+          for f in skills/*/evals/evals.json; do
+            python3 -c "import json,sys; json.load(open('$f'))" || exit 1
+          done
+
+      - name: Check plugin and marketplace versions agree
+        run: |
+          python3 - <<'PY'
+          import json, sys
+          plugin = json.load(open(".claude-plugin/plugin.json"))
+          market = json.load(open(".claude-plugin/marketplace.json"))
+          entry = next(p for p in market["plugins"] if p["name"] == plugin["name"])
+          if entry["version"] != plugin["version"]:
+              sys.exit(f"version mismatch: plugin.json={plugin['version']} marketplace.json={entry['version']}")
+          print(f"versions agree: {plugin['version']}")
+          PY

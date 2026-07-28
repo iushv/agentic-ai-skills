@@ -1,0 +1,40 @@
+{
+  "skill_name": "agentic-design-review",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Review this agent before I merge it. It registers 12 tools, the ReAct loop is `while True:` with no counter, and there is no cost or token tracking anywhere.",
+      "expected_output": "A design review that fails the agent on God Agent and missing iteration/budget limits, and names the specific config fields to add.",
+      "expectations": [
+        "The review reports an overall score of FAIL",
+        "The review flags the God Agent anti-pattern because more than 7 tools are registered",
+        "The review flags missing max_iterations as a failure",
+        "The review flags missing max_cost_usd or max_tokens as a failure",
+        "Each finding carries a suggested fix, not just a description of the problem"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Does this tool look production ready?\n\nclass QueryDB(BaseModel):\n    \"\"\"Query the database.\"\"\"\n    sql: str\n    limit: int",
+      "expected_output": "A review flagging unconstrained SQL (mutations reachable), a thin docstring, unconstrained parameters, and no structured return type.",
+      "expectations": [
+        "The review flags that the sql parameter is unconstrained and permits mutations such as DELETE or DROP",
+        "The review flags the docstring for missing WHEN-to-use and returns information",
+        "The review flags that limit has no min/max bound",
+        "The review flags the absence of a structured result model",
+        "The review proposes a corrected schema"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Audit this agent for production readiness. It is a Level 3 ReAct agent with 5 read-only tools, max_iterations=10, max_cost_usd=0.50, timeout 120s, Langfuse tracing on every step, input injection filtering, PII scrubbing on output, and 14 unit tests. There is no eval dataset and no CI gate.",
+      "expected_output": "A review that identifies the architecture level as L3, passes most categories, and isolates the missing eval gate as the top-priority fix.",
+      "expectations": [
+        "The review identifies the architecture level as L3 and justifies it",
+        "The review does not report an overall FAIL for the budget, safety, or observability categories",
+        "The review flags the missing eval dataset and CI gate",
+        "The top priority fix names the eval gate rather than a lower-severity finding"
+      ]
+    }
+  ]
+}

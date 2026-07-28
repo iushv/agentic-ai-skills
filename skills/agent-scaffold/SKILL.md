@@ -1,6 +1,6 @@
 ---
 name: agent-scaffold
-description: Generate a production-ready agent skeleton with tools, guardrails, and tests.
+description: Generate a production-ready agent skeleton — agent loop, tool schemas, guardrail pipeline, budget config, tracing, and tests. Use this whenever the user wants to start, bootstrap, scaffold, or set up a new AI agent, add an agent to an existing system, or prototype one to validate tool design — including open-ended asks like "help me build an agent that does X".
 ---
 
 # Agent Scaffold
@@ -20,7 +20,7 @@ Provide:
 - **Task description**: What the agent should accomplish.
 - **Tool list**: Names and brief descriptions of tools the agent needs.
 - **Architecture level** (optional): Override auto-detection. Default: auto-select.
-- **Model** (optional): Primary model to use. Default: claude-sonnet-4-6.
+- **Model** (optional): Primary model to use. Default: claude-sonnet-5.
 
 ## Architecture Level Selection
 
@@ -65,8 +65,13 @@ class AgentConfig(BaseModel):
     max_tokens: int = Field(default=100_000)
     max_cost_usd: float = Field(default=0.50)
     timeout_seconds: int = Field(default=120, le=600)
-    model: str = "claude-sonnet-4-6"
-    fallback_models: list[str] = ["claude-haiku-4-5-20251001"]
+    model: str = "claude-sonnet-5"
+    fallback_models: list[str] = ["claude-haiku-4-5"]
+    # Reasoning depth. Prefer adaptive thinking + effort over a fixed token budget.
+    effort: Literal["low", "medium", "high", "xhigh", "max"] = "high"
+    # Optional server-side pacing for agentic loops. Distinct from max_tokens:
+    # the model sees this countdown and wraps up gracefully instead of truncating.
+    task_budget_tokens: int | None = None
 ```
 
 ## Tool Template

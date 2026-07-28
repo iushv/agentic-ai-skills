@@ -1,6 +1,6 @@
 ---
 name: guardrail-setup
-description: Add a defense-in-depth guardrail pipeline with input/output validation and tests.
+description: Add a defense-in-depth guardrail pipeline — schema validation, prompt-injection detection, SQL and code-execution sandboxing, PII scrubbing, and tests for every layer. Use this whenever the user asks about agent safety, prompt injection, jailbreaks, input validation, output filtering, PII leakage, or hardening an agent after a security review or incident.
 ---
 
 # Guardrail Setup

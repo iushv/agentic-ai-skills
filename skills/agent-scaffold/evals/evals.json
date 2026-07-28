@@ -1,0 +1,40 @@
+{
+  "skill_name": "agent-scaffold",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Scaffold an agent that answers business questions over our Postgres analytics warehouse and can draw a chart when it helps.",
+      "expected_output": "A Level 3 ReAct scaffold with a read-only SQL tool, a chart tool, budget limits, guardrails, tracing, and test stubs.",
+      "expectations": [
+        "The architecture level is identified as L3 with a justification",
+        "A SQL tool is generated that is constrained to SELECT or WITH queries",
+        "The generated AgentConfig sets max_iterations, max_tokens, max_cost_usd, and timeout_seconds",
+        "The generated config uses a current model alias such as claude-sonnet-5, not a date-suffixed id",
+        "The scaffold includes guardrails for input and output, not only the agent loop",
+        "Test stubs are generated for the tools and the guardrails"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "I want to build an agent that takes a support email and rewrites it in a friendlier tone.",
+      "expected_output": "A Level 0 or Level 1 scaffold, explicitly declining to build a tool-using agent for a single-turn transformation.",
+      "expectations": [
+        "The architecture level selected is L0 or L1, not L3 or higher",
+        "The response explains why no tool-using agent loop is needed for this task",
+        "No ReAct loop with dynamic tool selection is generated",
+        "Budget limits are still set on the LLM call"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Scaffold an agent that can read files, run tests, and open a pull request. It needs different permissions for the read step and the write step.",
+      "expected_output": "A scaffold that justifies Level 4 on the permission split, keeps each agent within the 3-7 tool range, and sandboxes execution.",
+      "expectations": [
+        "Level 4 is selected and the justification cites differing permissions",
+        "No single agent in the scaffold registers more than 7 tools",
+        "The test-running tool is sandboxed with network disabled and a non-root user",
+        "The pull-request tool is identified as non-idempotent or gated behind approval"
+      ]
+    }
+  ]
+}

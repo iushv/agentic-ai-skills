@@ -1,6 +1,6 @@
 ---
 name: tool-schema-design
-description: Design a Pydantic tool schema from a natural-language tool description.
+description: Design or tighten a Pydantic v2 tool schema from a plain-English description of what the tool should do. Use this whenever the user is defining a tool or function for an agent, wrapping an API endpoint as an agent tool, writing an MCP tool definition, or asking how to constrain tool parameters — and whenever an existing schema needs review for loose types, unconstrained strings, or thin descriptions.
 ---
 
 # Tool Schema Design

@@ -1,6 +1,6 @@
 ---
 name: agentic-design-review
-description: Review agentic AI code against production blueprint rules and flag violations.
+description: Review agent code, tool schemas, or system prompts against production rules and report violations with severity and concrete fixes. Use this whenever the user asks to review, audit, or sanity-check an agent, a tool definition, or a prompt; before merging a PR that touches agent behavior; when they ask "is this agent production ready?"; or right after scaffolding a new agent — even when they never say the word "review".
 ---
 
 # Agentic Design Review

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "agentic-ai-skills",
+  "description": "Skills for building production-grade agentic AI systems.",
+  "owner": {
+    "name": "Ayush Kumar",
+    "url": "https://github.com/iushv"
+  },
+  "plugins": [
+    {
+      "name": "agentic-ai-skills",
+      "description": "Production rules and five skills for building agentic AI systems: design review, agent scaffolding, tool schema design, incident debugging, and guardrail pipelines.",
+      "version": "0.2.0",
+      "author": {
+        "name": "Ayush Kumar",
+        "url": "https://github.com/iushv"
+      },
+      "category": "development",
+      "source": ".",
+      "homepage": "https://github.com/iushv/agentic-ai-skills"
+    }
+  ]
+}

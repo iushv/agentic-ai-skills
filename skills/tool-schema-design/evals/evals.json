@@ -1,0 +1,41 @@
+{
+  "skill_name": "tool-schema-design",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I need a tool my agent can use to run analytics queries against our read replica.",
+      "expected_output": "A Pydantic v2 schema named with a verb_noun pattern, constrained to read-only SQL, with a bounded timeout and a structured result model.",
+      "expectations": [
+        "The tool name follows the verb_noun pattern, for example run_sql",
+        "The sql parameter carries a pattern constraint restricting it to SELECT or WITH",
+        "A timeout parameter is bounded with an upper limit",
+        "The docstring contains a when-to-use section, a do-not-use section, and a description of the return value",
+        "A separate Pydantic result model is defined rather than returning a raw dict or string"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Tighten this up for me:\n\nclass Search(BaseModel):\n    query: str\n    filters: dict\n    opts: dict",
+      "expected_output": "A rewritten schema that renames the tool, replaces both dict parameters with typed constrained fields, and adds a result model.",
+      "expectations": [
+        "The tool is renamed to a verb_noun form such as search_documents",
+        "The query parameter gains a length constraint",
+        "Neither unconstrained dict parameter survives in the rewritten schema",
+        "Pagination or result limits are expressed as bounded integers",
+        "The response explains why unconstrained dict parameters are a problem for tool selection"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Design a tool that lets the agent send a customer refund.",
+      "expected_output": "A schema with constrained amount and currency fields, an idempotency key, and an explicit non-idempotent warning in the docstring.",
+      "expectations": [
+        "The amount parameter is bounded with a minimum and maximum",
+        "The currency parameter uses an enum or Literal rather than a free string",
+        "An idempotency key parameter is included",
+        "The docstring explicitly flags the tool as having irreversible side effects",
+        "The schema has five or fewer parameters, or the response justifies a split"
+      ]
+    }
+  ]
+}

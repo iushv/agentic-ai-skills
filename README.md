@@ -1,5 +1,8 @@
 # Agentic AI Skills
 
+[![CI](https://github.com/iushv/agentic-ai-skills/actions/workflows/ci.yml/badge.svg)](https://github.com/iushv/agentic-ai-skills/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Production rules and reusable skills for building agentic AI systems. Works as a
 **contextual plugin** across Claude Code, Cursor, GitHub Copilot, OpenAI Codex,
 Windsurf, and Aider — active only when you're building agentic AI.
@@ -10,6 +13,8 @@ Windsurf, and Aider — active only when you're building agentic AI.
   observability, cost, testing).
 - **5 Skills** — Reusable workflows for design review, scaffolding, tool design,
   debugging, and guardrail setup.
+- **Evals** — 15 graded test cases (3 per skill) so skill changes are measured, not
+  guessed at.
 - **Auto-sync** — One script generates contextual rule files for every supported tool.
 
 ## Quick Start
@@ -30,6 +35,13 @@ bash your-project/agentic-ai-skills/validate.sh
 ### Claude Code
 
 Skills use the **plugin directory format** (`<plugin>/skills/<name>/SKILL.md`).
+
+**Install as a plugin** (recommended):
+
+```
+/plugin marketplace add iushv/agentic-ai-skills
+/plugin install agentic-ai-skills@agentic-ai-skills
+```
 
 **Auto-discovery** (default): Skills are auto-discovered when working inside the
 `agentic-ai-skills/` directory. `CLAUDE.md` is lazy-loaded in the same context —
@@ -115,6 +127,28 @@ read:
 | `agent-debug` | `/agent-debug` | Diagnose failing agent via incident playbook |
 | `guardrail-setup` | `/guardrail-setup` | Add guardrail pipeline with tests |
 
+## Evals
+
+Each skill ships an eval set at `skills/<name>/evals/evals.json` — three graded cases
+covering the skill's main paths, written against the schema Anthropic's `skill-creator`
+uses. Every case pairs a realistic prompt with concrete, checkable expectations rather
+than a subjective quality bar:
+
+```json
+{
+  "id": 1,
+  "prompt": "My agent keeps hitting max_iterations. It calls search_docs with the same query eight times.",
+  "expectations": [
+    "The report categorises the failure as a loop",
+    "The root cause names the tool returning unhelpful or unchanging output"
+  ]
+}
+```
+
+The rules in `AGENTS.md` require an eval gate before merging a prompt or tool change.
+These exist so this package holds itself to that same bar — run them after editing any
+`SKILL.md` and treat a drop in pass rate as a regression.
+
 ## Keeping Rules in Sync
 
 `AGENTS.md` is the single source of truth. After editing it:
@@ -154,7 +188,7 @@ bash agentic-ai-skills/scripts/sync-rules.sh --clean-stale
 
 ### What `validate.sh` checks
 
-1. `AGENTS.md` ≤ 180 lines
+1. `AGENTS.md` ≤ 200 lines
 2. Each `SKILL.md` ≤ 500 lines
 3. SKILL.md frontmatter has `name` and `description`
 4. No absolute local paths in any file
@@ -170,14 +204,21 @@ bash agentic-ai-skills/scripts/sync-rules.sh --clean-stale
 your-project/
 ├── agentic-ai-skills/                       # The skills package (plugin format)
 │   ├── README.md
+│   ├── LICENSE
 │   ├── AGENTS.md                            # Canonical rules (edit this)
 │   ├── CLAUDE.md                            # Claude Code project memory
+│   ├── .claude-plugin/
+│   │   ├── plugin.json                      # Plugin manifest
+│   │   └── marketplace.json                 # Marketplace entry
+│   ├── .github/workflows/ci.yml             # Runs sync + validate on every push
 │   ├── skills/
-│   │   ├── agentic-design-review/SKILL.md   # Canonical skill sources
-│   │   ├── agent-scaffold/SKILL.md
-│   │   ├── tool-schema-design/SKILL.md
-│   │   ├── agent-debug/SKILL.md
-│   │   └── guardrail-setup/SKILL.md
+│   │   ├── agentic-design-review/
+│   │   │   ├── SKILL.md                     # Canonical skill source
+│   │   │   └── evals/evals.json             # Graded test cases
+│   │   ├── agent-scaffold/
+│   │   ├── tool-schema-design/
+│   │   ├── agent-debug/
+│   │   └── guardrail-setup/
 │   ├── scripts/sync-rules.sh               # Generates tool-specific files
 │   └── validate.sh                          # Pre-publish checks
 │

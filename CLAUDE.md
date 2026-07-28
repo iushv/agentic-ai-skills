@@ -15,9 +15,13 @@ This package follows Claude Code's **plugin directory structure**:
 
 ### Model IDs
 
-- **Primary**: `claude-sonnet-4-6` (best balance of quality and speed)
-- **Complex tasks**: `claude-opus-4-6` (highest capability)
-- **Fast/cheap tasks**: `claude-haiku-4-5-20251001` (lowest latency)
+- **Primary**: `claude-sonnet-5` (best balance of quality and speed)
+- **Complex tasks**: `claude-opus-5` (highest capability)
+- **Fast/cheap tasks**: `claude-haiku-4-5` (lowest latency)
+
+Use model aliases, never date-suffixed IDs. Control reasoning depth with
+adaptive thinking (`thinking={"type": "adaptive"}`) plus `output_config.effort`
+— fixed `budget_tokens` is removed on current models and returns a 400.
 
 ### Available Skills
 

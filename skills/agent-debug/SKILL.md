@@ -1,6 +1,6 @@
 ---
 name: agent-debug
-description: Diagnose a failing agent using the production incident playbook.
+description: Diagnose why an agent is failing, looping, choosing the wrong tools, hallucinating, overrunning its budget, or dying silently. Use this whenever the user reports an agent misbehaving, pastes an agent trace or error, or says things like "my agent keeps looping", "it calls the wrong tool", "costs are spiking", or "it returns nothing and no error".
 ---
 
 # Agent Debug

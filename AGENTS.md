@@ -22,8 +22,7 @@ Pick the simplest level that works. Most production systems are Level 1-3.
 
 **Golden Rule**: Start at Level 0. Move up only when the current level demonstrably fails.
 
-Decision path: No tools needed? → L0/L1. Predictable sequence? → L1/L2.
-Dynamic tools? → L3. Different permissions? → L4. Open-ended? → L5.
+Decision path: no tools → L0/L1; fixed sequence → L1/L2; dynamic tools → L3; split permissions → L4; open-ended → L5.
 
 ## Tool Design Rules
 
@@ -34,9 +33,12 @@ Tools determine agent quality more than prompts. Follow all six principles:
 3. **Constrained parameters** — Use enums, patterns, min/max. No unconstrained strings.
 4. **Small and focused** — 10 small tools > 3 god-tools. Limit 3-7 tools per agent.
 5. **Idempotent** — Safe to retry without side effects where possible.
-6. **Structured output** — Return typed data, not free-form text.
+6. **Structured output** — Return typed data, not free-form text. Enforce it with
+   `output_config.format` (JSON schema) or `strict: true` on the tool definition.
 
 Expose tools via MCP (Model Context Protocol) for cross-platform interoperability.
+Past ~10 tools, defer loading and let tool search surface the relevant few per turn
+rather than splitting the work across more agents.
 
 ## Safety Rules
 
@@ -82,6 +84,15 @@ Apply defense-in-depth. Every request passes through a 6-layer pipeline:
 **Dead letter queue:**
 - Store failed tasks for manual review and replay. Alert if DLQ > 50 items.
 
+## Context Rules
+
+- **Compaction** — summarize earlier turns as context fills. Append the full response
+  content back, not just the text, or the compaction state is lost.
+- **Context editing** — clear stale tool results and thinking blocks when old outputs
+  are no longer relevant, instead of summarizing them.
+- **Memory** — persist learnings to files for anything that must survive the session.
+- Never put credentials in prompts or memory. Both persist in history and replay.
+
 ## Observability Rules
 
 Trace every span. Emit structured events for: run start/end, LLM call/response,
@@ -102,6 +113,13 @@ tool call/result, guardrail checks, errors. Use Langfuse or LangSmith.
 - `max_iterations`: default 10, hard cap 50.
 - `timeout_seconds`: default 120, hard cap 600.
 - Truncate large tool outputs at 10,000 chars.
+
+**Reasoning depth:**
+- Use adaptive thinking (`thinking={"type": "adaptive"}`) with `output_config.effort`.
+  A fixed `budget_tokens` is removed on current models and returns a 400.
+- Default `effort` to `high`; drop to `medium`/`low` for routine or latency-bound work.
+- Give agentic loops a `task_budget` so the model paces itself. `max_tokens` truncates
+  mid-thought; a task budget lets it finish gracefully.
 
 **Three caching strategies:**
 1. **Exact cache** — Same question → same answer. TTL 1 hour.

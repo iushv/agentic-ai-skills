@@ -1,0 +1,20 @@
+{
+  "name": "agentic-ai-skills",
+  "description": "Production rules and five skills for building agentic AI systems: design review, agent scaffolding, tool schema design, incident debugging, and guardrail pipelines. Works across Claude Code, Cursor, Copilot, Codex, Windsurf, and Aider from one canonical ruleset.",
+  "version": "0.2.0",
+  "author": {
+    "name": "Ayush Kumar",
+    "url": "https://github.com/iushv"
+  },
+  "homepage": "https://github.com/iushv/agentic-ai-skills",
+  "repository": "https://github.com/iushv/agentic-ai-skills",
+  "license": "MIT",
+  "keywords": [
+    "agentic-ai",
+    "llm",
+    "guardrails",
+    "observability",
+    "tool-design",
+    "evals"
+  ]
+}

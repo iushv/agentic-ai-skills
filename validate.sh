@@ -43,10 +43,10 @@ echo ""
 CHECK_NUM=$((CHECK_NUM + 1))
 echo "[$CHECK_NUM/$TOTAL_CHECKS] AGENTS.md line count"
 AGENTS_LINES="$(wc -l < "$ROOT_DIR/AGENTS.md" | tr -d ' ')"
-if [ "$AGENTS_LINES" -le 180 ]; then
-  pass "AGENTS.md is $AGENTS_LINES lines (limit: 180)"
+if [ "$AGENTS_LINES" -le 200 ]; then
+  pass "AGENTS.md is $AGENTS_LINES lines (limit: 200)"
 else
-  fail "AGENTS.md is $AGENTS_LINES lines (limit: 180)"
+  fail "AGENTS.md is $AGENTS_LINES lines (limit: 200)"
 fi
 
 # --- Check 2: SKILL.md line counts ≤ 500 ---

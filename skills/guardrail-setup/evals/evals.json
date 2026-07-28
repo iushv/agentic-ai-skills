@@ -1,0 +1,41 @@
+{
+  "skill_name": "guardrail-setup",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Set up guardrails for a support agent that can query our customer database. It sees names, emails, and phone numbers.",
+      "expected_output": "A six-layer pipeline with SELECT-only SQL enforcement and PII scrubbing on output, wired into the request path, with tests per layer.",
+      "expectations": [
+        "The generated pipeline covers input schema validation, content filtering, semantic analysis, tool guardrails, and output guardrails",
+        "SQL validation rejects INSERT, UPDATE, DELETE, DROP, ALTER, and TRUNCATE",
+        "Output scrubbing covers email and phone number patterns",
+        "An integration snippet shows the pipeline wired into the request handler",
+        "Tests are generated with both blocking and passing cases for each layer"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "People keep jailbreaking our chatbot. Someone got it to print its system prompt yesterday.",
+      "expected_output": "Injection detection plus a semantic extraction check and a system-prompt-leak check on output, with a test corpus.",
+      "expectations": [
+        "Regex detection for instruction-override phrasing such as ignore previous instructions is included",
+        "A semantic check for system prompt extraction attempts is included",
+        "An output check for system prompt fragments leaking into the response is included",
+        "The response recommends wrapping external content in untrusted markers",
+        "Negative test cases are included so benign queries are not blocked"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Our agent runs Python that users supply. What guardrails do I need?",
+      "expected_output": "A sandbox specification with network disabled, read-only filesystem, resource limits, and a non-root user, plus tests proving each restriction holds.",
+      "expectations": [
+        "The sandbox configuration sets network access to none",
+        "The sandbox runs as a non-root user",
+        "Memory, CPU, or wall-clock resource limits are specified",
+        "The filesystem is read-only or restricted to a scratch directory",
+        "A test is included that asserts network access fails from inside the sandbox"
+      ]
+    }
+  ]
+}
