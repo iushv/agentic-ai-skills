@@ -1,0 +1,59 @@
+"""Path confinement tests (layer 5)."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from ${package}.tool_guards import ToolBlocked, validate_path, validate_write_path
+
+
+@pytest.mark.parametrize(
+    "candidate",
+    [
+        "../../etc/passwd",
+        "../outside.txt",
+        "%2e%2e%2fetc%2fpasswd",
+        "/etc/passwd",
+        "subdir/../../escape.txt",
+    ],
+)
+def test_traversal_blocked(candidate: str, tmp_path: Path) -> None:
+    with pytest.raises(ToolBlocked):
+        validate_path(candidate, tmp_path)
+
+
+def test_null_byte_blocked(tmp_path: Path) -> None:
+    with pytest.raises(ToolBlocked):
+        validate_path("ok.txt\x00.py", tmp_path)
+
+
+@pytest.mark.parametrize("candidate", ["data.csv", "reports/q3.csv", "./nested/deep/file.txt"])
+def test_paths_inside_root_allowed(candidate: str, tmp_path: Path) -> None:
+    assert validate_path(candidate, tmp_path).is_relative_to(tmp_path.resolve())
+
+
+def test_symlink_escape_blocked(tmp_path: Path) -> None:
+    outside = tmp_path.parent / "outside_target"
+    outside.mkdir(exist_ok=True)
+    (tmp_path / "link").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ToolBlocked):
+        validate_path("link/secret.txt", tmp_path)
+
+
+def test_must_exist_is_enforced(tmp_path: Path) -> None:
+    with pytest.raises(ToolBlocked):
+        validate_path("absent.txt", tmp_path, must_exist=True)
+    (tmp_path / "present.txt").write_text("hi")
+    assert validate_path("present.txt", tmp_path, must_exist=True)
+
+
+@pytest.mark.parametrize("name", ["payload.py", "run.sh", "lib.so", "tool.exe"])
+def test_executable_writes_blocked(name: str, tmp_path: Path) -> None:
+    with pytest.raises(ToolBlocked):
+        validate_write_path(name, tmp_path)
+
+
+def test_ordinary_writes_allowed(tmp_path: Path) -> None:
+    assert validate_write_path("report.csv", tmp_path)

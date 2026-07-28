@@ -1,0 +1,73 @@
+"""Layer 5: code execution sandboxing.
+
+This module does not run code. It defines what a safe sandbox looks like and
+fails loudly when the runtime is configured otherwise, so a misconfiguration
+surfaces at startup rather than during an incident.
+
+Enforce these settings in whatever actually runs the code — a container
+runtime, a microVM, or a hosted execution tool.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from .base import ToolBlocked
+
+# Deliberately restrictive. Loosen one setting at a time, with a reason.
+SANDBOX_SPEC: dict[str, Any] = {
+    "network": "none",
+    "user": "nobody",
+    "read_only_root": True,
+    "memory_mb": 512,
+    "cpu_seconds": 10,
+    "wall_clock_seconds": 30,
+    "pids_limit": 64,
+    "drop_capabilities": True,
+    "writable_paths": ["/tmp/sandbox"],
+}
+
+REQUIRED_LIMITS = ("memory_mb", "cpu_seconds", "wall_clock_seconds", "pids_limit")
+
+
+def assert_sandboxed(spec: dict[str, Any]) -> None:
+    """Raise unless every non-negotiable restriction is in place."""
+    problems: list[str] = []
+
+    if spec.get("network") != "none":
+        problems.append("network must be 'none'; code execution needs no egress")
+    if spec.get("user") in (None, "", "root", 0):
+        problems.append("must not run as root")
+    if not spec.get("read_only_root"):
+        problems.append("root filesystem must be read-only")
+    if not spec.get("drop_capabilities"):
+        problems.append("linux capabilities must be dropped")
+    for limit in REQUIRED_LIMITS:
+        value = spec.get(limit)
+        if not isinstance(value, int) or value <= 0:
+            problems.append(f"{limit} must be a positive integer")
+
+    if problems:
+        raise ToolBlocked("unsafe sandbox: " + "; ".join(problems))
+
+
+def docker_run_args(spec: dict[str, Any] | None = None) -> list[str]:
+    """Render the spec as docker flags, after checking it.
+
+    Useful as a reference even when you run something other than Docker: it
+    shows exactly which knob each requirement maps to.
+    """
+    spec = spec or SANDBOX_SPEC
+    assert_sandboxed(spec)
+    args = [
+        "--network", "none",
+        "--user", str(spec["user"]),
+        "--read-only",
+        "--cap-drop", "ALL",
+        "--security-opt", "no-new-privileges",
+        "--memory", f"{spec['memory_mb']}m",
+        "--pids-limit", str(spec["pids_limit"]),
+    ]
+    for path in spec.get("writable_paths", []):
+        args += ["--tmpfs", f"{path}:rw,noexec,nosuid,size=64m"]
+    return args

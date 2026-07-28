@@ -1,0 +1,47 @@
+"""Layer 5: filesystem path confinement.
+
+Never pass a model-supplied path straight to `open()`. Resolve it against a
+fixed root and confirm it stayed inside, so traversal cannot escape by any
+spelling — `..`, symlinks, absolute paths, or URL-encoded variants.
+"""
+
+from __future__ import annotations
+
+import urllib.parse
+from pathlib import Path
+
+from .base import ToolBlocked
+
+# Extensions a tool should refuse to write regardless of location. Writing any
+# of these turns a file tool into a code-execution tool.
+DANGEROUS_SUFFIXES = frozenset(
+    {".py", ".sh", ".bash", ".zsh", ".pyc", ".so", ".dylib", ".dll", ".exe"}
+)
+
+
+def validate_path(candidate: str, root: Path, *, must_exist: bool = False) -> Path:
+    """Resolve `candidate` inside `root` or raise.
+
+    Decoding happens first: `%2e%2e%2f` is `../` to the filesystem but not to a
+    naive substring check, so decode before resolving.
+    """
+    decoded = urllib.parse.unquote(candidate)
+    if "\x00" in decoded:
+        raise ToolBlocked("null byte in path")
+
+    resolved_root = root.resolve()
+    target = (resolved_root / decoded).resolve()
+
+    if not target.is_relative_to(resolved_root):
+        raise ToolBlocked(f"path escapes the allowed root: {candidate}")
+    if must_exist and not target.exists():
+        raise ToolBlocked(f"path does not exist: {candidate}")
+    return target
+
+
+def validate_write_path(candidate: str, root: Path) -> Path:
+    """Path confinement plus an extension check, for tools that write."""
+    target = validate_path(candidate, root)
+    if target.suffix.lower() in DANGEROUS_SUFFIXES:
+        raise ToolBlocked(f"refusing to write an executable file type: {target.suffix}")
+    return target

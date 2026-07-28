@@ -13,8 +13,9 @@ Windsurf, and Aider — active only when you're building agentic AI.
   observability, cost, testing).
 - **5 Skills** — Reusable workflows for design review, scaffolding, tool design,
   debugging, and guardrail setup.
-- **A working generator** — `agent-scaffold` is not prose. It ships templates and a
-  script that emit a runnable agent project whose test suite passes offline.
+- **Two working generators** — `agent-scaffold` and `guardrail-setup` are not prose.
+  Each ships templates and a script that emit runnable code whose test suite passes
+  offline.
 - **Evals** — 15 graded test cases (3 per skill) so skill changes are measured, not
   guessed at.
 - **Auto-sync** — One script generates contextual rule files for every supported tool.
@@ -34,8 +35,24 @@ That produces 20 files — ReAct loop, budget config, six-layer guardrail pipeli
 retry with circuit breaker and model fallback, structured tracing, and 68 tests
 that drive the real loop against a fake model. No API key needed to run them.
 
-CI generates a project on every push, byte-compiles it, and runs its suite, so
-the templates cannot rot silently.
+## Harden an existing agent
+
+```bash
+python skills/guardrail-setup/scripts/add_guardrails.py \
+  --out ./myproject/guardrails --sql --files
+
+pytest ./myproject/guardrails
+```
+
+That drops in a six-layer pipeline: schema validation, injection patterns, an ML
+classifier seam, semantic intent checks, per-tool guards, and output scrubbing.
+Layer 5 guards are opt-in per risk — SQL, filesystem, code execution — so you
+get 13 files and 53 tests minimally, or 19 files and 108 tests with everything.
+The tests need only `pytest` and `pydantic`.
+
+CI runs both generators on every push — generating, byte-compiling, and running
+the emitted test suites, the guardrail package in both its minimal and
+fully-armed configurations — so the templates cannot rot silently.
 
 ## Quick Start
 
@@ -139,13 +156,13 @@ read:
 
 ## Skills Reference
 
-| Skill | Command | Purpose |
-|-------|---------|---------|
-| `agentic-design-review` | `/agentic-design-review` | Review agentic code against blueprint rules |
-| `agent-scaffold` | `/agent-scaffold` | Generate production-ready agent skeleton |
-| `tool-schema-design` | `/tool-schema-design` | Design Pydantic tool schema from description |
-| `agent-debug` | `/agent-debug` | Diagnose failing agent via incident playbook |
-| `guardrail-setup` | `/guardrail-setup` | Add guardrail pipeline with tests |
+| Skill | Command | Purpose | Ships code |
+|-------|---------|---------|---|
+| `agentic-design-review` | `/agentic-design-review` | Review agentic code against blueprint rules | |
+| `agent-scaffold` | `/agent-scaffold` | Generate production-ready agent skeleton | ✅ generator |
+| `tool-schema-design` | `/tool-schema-design` | Design Pydantic tool schema from description | |
+| `agent-debug` | `/agent-debug` | Diagnose failing agent via incident playbook | |
+| `guardrail-setup` | `/guardrail-setup` | Add guardrail pipeline with tests | ✅ generator |
 
 ## Evals
 
@@ -241,9 +258,13 @@ your-project/
 │   │   │   ├── scripts/scaffold.py          # The generator
 │   │   │   ├── assets/                      # Templates it renders
 │   │   │   └── evals/evals.json
+│   │   ├── guardrail-setup/
+│   │   │   ├── SKILL.md
+│   │   │   ├── scripts/add_guardrails.py
+│   │   │   ├── assets/                      # Templates it renders
+│   │   │   └── evals/evals.json
 │   │   ├── tool-schema-design/
-│   │   ├── agent-debug/
-│   │   └── guardrail-setup/
+│   │   └── agent-debug/
 │   ├── scripts/sync-rules.sh               # Generates tool-specific files
 │   └── validate.sh                          # Pre-publish checks
 │

@@ -1,0 +1,61 @@
+"""Layer 4: semantic analysis.
+
+Intent-level checks for threats that survive pattern matching, because they are
+phrased in ordinary language. Keyword lists are a starting point, not the
+finished article — replace them with a real intent classifier once you have
+enough production traffic to train or evaluate one.
+"""
+
+from __future__ import annotations
+
+EXFIL_KEYWORDS = (
+    "send to",
+    "post to",
+    "email to",
+    "upload to",
+    "forward to",
+    "webhook",
+    "exfiltrate",
+)
+ESCALATION_KEYWORDS = (
+    "sudo",
+    "bypass",
+    "override",
+    "escalate",
+    "disable the",
+    "turn off the",
+    "grant me",
+    "admin access",
+)
+EXTRACTION_KEYWORDS = (
+    "system prompt",
+    "your instructions",
+    "your rules",
+    "repeat your",
+    "print your",
+    "reveal your",
+    "what were you told",
+)
+
+# Flags that block outright. The rest are recorded for review but allowed:
+# blocking on escalation wording alone produces too many false positives on
+# legitimate questions about permissions.
+BLOCKING_FLAGS = frozenset({"potential_exfiltration", "potential_prompt_extraction"})
+
+
+def semantic_flags(text: str) -> list[str]:
+    """Return intent flags for the text. Empty means nothing suspicious."""
+    lowered = text.lower()
+    flags: list[str] = []
+    if any(k in lowered for k in EXFIL_KEYWORDS):
+        flags.append("potential_exfiltration")
+    if any(k in lowered for k in ESCALATION_KEYWORDS):
+        flags.append("potential_escalation")
+    if any(k in lowered for k in EXTRACTION_KEYWORDS):
+        flags.append("potential_prompt_extraction")
+    return flags
+
+
+def blocking_flags(text: str) -> list[str]:
+    """Only the flags that should stop the request."""
+    return sorted(BLOCKING_FLAGS.intersection(semantic_flags(text)))

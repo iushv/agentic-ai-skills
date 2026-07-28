@@ -1,0 +1,120 @@
+"""Output guardrail tests (layer 6)."""
+
+from __future__ import annotations
+
+import pytest
+
+from ${package}.output import (
+    check_grounding,
+    leaked_system_prompt,
+    scrub_pii,
+    validate_output,
+)
+from ${package}.pipeline import GuardrailPipeline
+
+SYSTEM = "You are a careful analyst who never speculates about future results."
+
+
+# --- PII -----------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "label"),
+    [
+        ("reach me at ada@example.com", "EMAIL"),
+        ("call 555-123-4567", "PHONE"),
+        ("ssn 123-45-6789", "SSN"),
+        ("card 4111 1111 1111 1111", "CREDIT_CARD"),
+        ("host 192.168.1.100", "IPV4"),
+        ("key AKIAIOSFODNN7EXAMPLE", "AWS_KEY"),
+        ("token sk-abcdefghijklmnop1234", "BEARER"),
+    ],
+)
+def test_pii_is_redacted(text: str, label: str) -> None:
+    scrubbed, counts = scrub_pii(text)
+    assert counts.get(label) == 1
+    assert f"[{label}_REDACTED]" in scrubbed
+
+
+def test_clean_text_is_untouched() -> None:
+    scrubbed, counts = scrub_pii("Revenue grew twelve percent year over year.")
+    assert counts == {}
+    assert scrubbed == "Revenue grew twelve percent year over year."
+
+
+def test_allowlisted_value_survives() -> None:
+    scrubbed, counts = scrub_pii(
+        "write to support@ourcompany.com", allow=frozenset({"support@ourcompany.com"})
+    )
+    assert "support@ourcompany.com" in scrubbed
+    assert counts == {}
+
+
+# --- prompt leak ---------------------------------------------------------
+
+
+def test_verbatim_prompt_fragment_detected() -> None:
+    assert leaked_system_prompt(f"Sure thing. {SYSTEM}", SYSTEM)
+
+
+def test_unrelated_answer_is_not_a_leak() -> None:
+    assert not leaked_system_prompt("Revenue grew twelve percent.", SYSTEM)
+
+
+def test_empty_system_prompt_never_reports_a_leak() -> None:
+    assert not leaked_system_prompt("anything at all", "")
+
+
+def test_leak_is_prefixed_with_a_refusal() -> None:
+    report = validate_output(f"Of course. {SYSTEM}", system_prompt=SYSTEM)
+    assert report.leaked_prompt is True
+    assert report.text.startswith("I can't share my configuration.")
+
+
+# --- grounding -----------------------------------------------------------
+
+
+def test_invented_number_is_flagged() -> None:
+    grounded, unsupported = check_grounding("Revenue was 4321", ["revenue: 1234"])
+    assert not grounded
+    assert "4321" in unsupported
+
+
+def test_supported_number_passes() -> None:
+    grounded, unsupported = check_grounding("Revenue was 1234", ["revenue: 1234"])
+    assert grounded and unsupported == []
+
+
+def test_comma_formatting_does_not_cause_false_positives() -> None:
+    grounded, _ = check_grounding("Revenue was 1,234", ["revenue: 1234"])
+    assert grounded
+
+
+def test_no_tool_output_means_nothing_to_ground_against() -> None:
+    grounded, unsupported = check_grounding("Revenue was 999", [])
+    assert grounded and unsupported == []
+
+
+# --- pipeline ------------------------------------------------------------
+
+
+def test_report_is_clean_for_a_clean_answer() -> None:
+    pipeline = GuardrailPipeline(system_prompt=SYSTEM)
+    report = pipeline.check_output("Revenue was 1234.", tool_outputs=["revenue: 1234"])
+    assert report.clean is True
+
+
+def test_report_collects_every_finding() -> None:
+    pipeline = GuardrailPipeline(system_prompt=SYSTEM)
+    report = pipeline.check_output(
+        "Contact ada@example.com. Revenue was 999.", tool_outputs=["revenue: 100"]
+    )
+    assert report.redactions.get("EMAIL") == 1
+    assert "999" in report.unsupported_claims
+    assert report.clean is False
+
+
+def test_output_checks_never_raise() -> None:
+    """A bad answer is cleaned and reported, never dropped on the floor."""
+    pipeline = GuardrailPipeline(system_prompt=SYSTEM)
+    assert pipeline.check_output("", tool_outputs=None).text == ""

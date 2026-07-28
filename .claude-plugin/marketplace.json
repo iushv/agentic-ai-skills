@@ -10,7 +10,7 @@
     {
       "name": "agentic-ai-skills",
       "description": "Production rules and five skills for building agentic AI systems: design review, agent scaffolding, tool schema design, incident debugging, and guardrail pipelines.",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "author": {
         "name": "Ayush Kumar",
         "url": "https://github.com/iushv"

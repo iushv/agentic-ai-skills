@@ -1,0 +1,53 @@
+"""Layer 2: content filtering.
+
+Pattern matching against known injection shapes. Fast and deterministic, which
+makes it a good second gate — but it only catches what it has seen before.
+Layer 3 exists because this one is not sufficient on its own.
+"""
+
+from __future__ import annotations
+
+import re
+
+# Each entry is (name, pattern). Names are what get logged and alerted on, so
+# keep them stable once you have dashboards pointing at them.
+INJECTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    (
+        "instruction_override",
+        re.compile(
+            r"\b(ignore|disregard|forget)\s+(all\s+|any\s+)?"
+            r"(previous|prior|above|earlier)\s+(instructions|prompts|rules)",
+            re.IGNORECASE,
+        ),
+    ),
+    ("role_injection", re.compile(r"^\s*(system|assistant)\s*:", re.IGNORECASE | re.MULTILINE)),
+    ("chat_template", re.compile(r"<\|im_(start|end)\|>|\[/?INST\]|<\|endoftext\|>", re.IGNORECASE)),
+    ("new_persona", re.compile(r"\byou\s+are\s+now\s+(a|an|the)\b", re.IGNORECASE)),
+    ("developer_mode", re.compile(r"\b(developer|debug|god|jailbreak)\s+mode\b", re.IGNORECASE)),
+    ("script_tag", re.compile(r"<\s*script[\s>]", re.IGNORECASE)),
+    ("js_uri", re.compile(r"javascript\s*:", re.IGNORECASE)),
+    ("inline_handler", re.compile(r"\bon(click|load|error|mouseover|focus)\s*=", re.IGNORECASE)),
+    ("remote_fetch", re.compile(r"\b(fetch|curl|wget)\s*[\(\s]+https?://", re.IGNORECASE)),
+    ("data_uri", re.compile(r"data:[a-z/]+;base64,", re.IGNORECASE)),
+    ("long_base64", re.compile(r"[A-Za-z0-9+/]{160,}={0,2}")),
+)
+
+
+def check_injection(text: str) -> list[str]:
+    """Return the names of every pattern that matched, in declaration order."""
+    return [name for name, pattern in INJECTION_PATTERNS if pattern.search(text)]
+
+
+def wrap_untrusted(content: str, source: str = "external") -> str:
+    """Fence third-party content so the model reads it as data, not instructions.
+
+    Any tool output, retrieved document, or scraped page that reaches the model
+    should go through this. The markers are stripped from the content first so
+    a hostile document cannot close the fence early and escape it.
+    """
+    safe = content.replace("</untrusted_content>", "&lt;/untrusted_content&gt;")
+    return (
+        f'<untrusted_content source="{source}">\n'
+        f"{safe}\n"
+        "</untrusted_content>"
+    )

@@ -73,6 +73,60 @@ jobs:
           python -m pip install --quiet pydantic pytest pytest-asyncio
           cd /tmp/demo_agent && python -m pytest
 
+  guardrails:
+    name: Generated guardrails pass their own tests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Both ends of the configuration space: no optional guards, and all
+          # of them. The conditional __all__ has to render correctly in each.
+          - config: minimal
+            flags: ""
+            expected_files: 13
+          - config: all-guards
+            flags: "--all-guards"
+            expected_files: 19
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Generate the guardrail package (${{ matrix.config }})
+        env:
+          FLAGS: ${{ matrix.flags }}
+        run: |
+          mkdir -p /tmp/host
+          python skills/guardrail-setup/scripts/add_guardrails.py \
+            --out /tmp/host/guardrails $FLAGS
+
+      - name: Check the expected file count
+        env:
+          EXPECTED: ${{ matrix.expected_files }}
+        run: |
+          actual=$(find /tmp/host/guardrails -type f | wc -l | tr -d ' ')
+          test "$actual" = "$EXPECTED" || { echo "expected $EXPECTED files, got $actual"; exit 1; }
+          echo "$actual files, as expected"
+
+      - name: Byte-compile every generated file
+        run: python -m compileall -q /tmp/host/guardrails
+
+      - name: Reject unresolved template placeholders
+        run: |
+          if grep -rEn '\$\{[a-z_]+\}' /tmp/host/guardrails; then
+            echo "unresolved template placeholders found"
+            exit 1
+          fi
+          echo "no unresolved placeholders"
+
+      - name: Run the generated test suite
+        run: |
+          python -m pip install --quiet pydantic pytest
+          cd /tmp/host && python -m pytest -q
+
   manifests:
     name: Validate plugin manifests
     runs-on: ubuntu-latest

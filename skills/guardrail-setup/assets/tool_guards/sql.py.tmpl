@@ -1,0 +1,62 @@
+"""Layer 5: read-only SQL enforcement.
+
+Tool arguments are model output, which makes them untrusted input. This is the
+single highest-value guard in most agents: a SQL tool that can mutate is one
+prompt injection away from data loss.
+"""
+
+from __future__ import annotations
+
+import re
+
+from .base import ToolBlocked
+
+MUTATING = re.compile(
+    r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|GRANT|REVOKE|MERGE|"
+    r"REPLACE|ATTACH|DETACH|PRAGMA|VACUUM|COPY|CALL|EXEC|EXECUTE|SET)\b",
+    re.IGNORECASE,
+)
+COMMENT = re.compile(r"(--|/\*|\*/|#)")
+# A semicolon followed by anything other than trailing whitespace means a
+# second statement is being smuggled in.
+SECOND_STATEMENT = re.compile(r";\s*\S")
+
+ALLOWED_PREFIXES = ("SELECT", "WITH", "EXPLAIN")
+
+
+def validate_sql(query: str, *, allow_explain: bool = True) -> str:
+    """Allow exactly one read-only statement. Return it, normalised.
+
+    Execute the *returned* string, not the original: that guarantees the
+    database sees the same text this function approved.
+
+    Comments are rejected rather than stripped. Stripping would leave the
+    validator reasoning about different text than the database executes, and
+    `SELECT 1 -- ; DROP TABLE x` is the standard shape of an obfuscation
+    attempt. Agent-issued SQL has no legitimate need for comments.
+    """
+    normalised = query.strip().rstrip(";").strip()
+    if not normalised:
+        raise ToolBlocked("empty query")
+    if COMMENT.search(normalised):
+        raise ToolBlocked("comments are not allowed in tool-issued SQL")
+    if SECOND_STATEMENT.search(normalised):
+        raise ToolBlocked("multiple statements are not allowed")
+
+    prefixes = ALLOWED_PREFIXES if allow_explain else ALLOWED_PREFIXES[:2]
+    if not normalised.upper().startswith(prefixes):
+        raise ToolBlocked(f"query must begin with one of {', '.join(prefixes)}")
+    if match := MUTATING.search(normalised):
+        raise ToolBlocked(f"mutating keyword blocked: {match.group(0).upper()}")
+    return normalised
+
+
+def enforce_limit(query: str, max_rows: int = 1000) -> str:
+    """Append a LIMIT when the query has none.
+
+    An unbounded SELECT is a cost and latency problem even when it is not a
+    security one: the result lands in the context window.
+    """
+    if re.search(r"\bLIMIT\s+\d+", query, re.IGNORECASE):
+        return query
+    return f"{query} LIMIT {max_rows}"

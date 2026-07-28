@@ -1,0 +1,107 @@
+"""The guardrail pipeline: layers 1-4 on the way in, layer 6 on the way out.
+
+Layer 5 (tool guards) is not called from here. It belongs inside each tool,
+where the arguments are, and lives in the `tool_guards` package.
+
+    pipeline = GuardrailPipeline(system_prompt=SYSTEM)
+    validated = await pipeline.check_input(user_query)
+    ...
+    report = pipeline.check_output(answer, tool_outputs=outputs)
+    return report.text
+"""
+
+from __future__ import annotations
+
+from pydantic import BaseModel, Field
+
+from .classifier import (
+    INJECTION_THRESHOLD,
+    TOXICITY_THRESHOLD,
+    Classifier,
+    NullClassifier,
+)
+from .content_filter import check_injection
+from .output import OutputReport, validate_output
+from .schema import AgentInput, GuardrailBlocked
+from .semantic import blocking_flags, semantic_flags
+
+
+class InputReport(BaseModel):
+    """Which layers ran and what they saw. Emit this on every request."""
+
+    validated: AgentInput
+    layers_run: list[str] = Field(default_factory=list)
+    advisory_flags: list[str] = Field(default_factory=list)
+    classifier_active: bool = False
+
+
+class GuardrailPipeline:
+    """Defence in depth, in a fixed order, with every layer accounted for."""
+
+    def __init__(
+        self,
+        *,
+        system_prompt: str = "",
+        classifier: Classifier | None = None,
+        injection_threshold: float = INJECTION_THRESHOLD,
+        toxicity_threshold: float = TOXICITY_THRESHOLD,
+        pii_allow: frozenset[str] = frozenset(),
+    ) -> None:
+        self.system_prompt = system_prompt
+        self.classifier: Classifier = classifier or NullClassifier()
+        self.injection_threshold = injection_threshold
+        self.toxicity_threshold = toxicity_threshold
+        self.pii_allow = pii_allow
+
+    async def check_input(
+        self, query: str, conversation_id: str = "default"
+    ) -> InputReport:
+        """Layers 1, 2, 3, 4 in order. Raises GuardrailBlocked on rejection.
+
+        Ordering is deliberate: cheap and deterministic checks run before the
+        expensive model-backed one, so an obvious attack never costs an
+        inference call.
+        """
+        layers: list[str] = []
+
+        # Layer 1 - schema. Pydantic raises ValidationError; let it through so
+        # the caller can distinguish malformed input from a blocked attack.
+        validated = AgentInput(query=query, conversation_id=conversation_id)
+        layers.append("schema")
+
+        # Layer 2 - patterns.
+        if matches := check_injection(validated.query):
+            raise GuardrailBlocked([f"injection:{m}" for m in matches], "content_filter")
+        layers.append("content_filter")
+
+        # Layer 3 - ML classification, if one is wired in.
+        verdict = await self.classifier.classify(validated.query)
+        if verdict.active:
+            layers.append("classifier")
+            if crossed := verdict.exceeds(self.injection_threshold, self.toxicity_threshold):
+                raise GuardrailBlocked(crossed, "classifier")
+
+        # Layer 4 - intent.
+        if blocking := blocking_flags(validated.query):
+            raise GuardrailBlocked(blocking, "semantic")
+        layers.append("semantic")
+
+        return InputReport(
+            validated=validated,
+            layers_run=layers,
+            # Non-blocking flags are still worth recording; a rise in these is
+            # usually the first sign of someone probing the agent.
+            advisory_flags=[f for f in semantic_flags(validated.query) if f not in blocking_flags(validated.query)],
+            classifier_active=verdict.active,
+        )
+
+    def check_output(
+        self, answer: str, tool_outputs: list[str] | None = None
+    ) -> OutputReport:
+        """Layer 6. Never raises: a bad answer is cleaned, not dropped."""
+        return validate_output(
+            answer,
+            system_prompt=self.system_prompt,
+            tool_outputs=tool_outputs,
+            allow=self.pii_allow,
+        )

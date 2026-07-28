@@ -1,0 +1,58 @@
+"""Layer 3: ML classification.
+
+This ships as a seam, not an implementation. A stub classifier that always
+passes is worse than none at all — it creates the appearance of a layer that
+is not doing anything — so the default is explicitly named `NullClassifier`
+and reports itself as inactive.
+
+To make this layer real, implement `Classifier` against a model such as
+`protectai/deberta-v3-base-prompt-injection-v2` for injection, or a moderation
+endpoint for toxicity, and pass it to the pipeline.
+"""
+
+from __future__ import annotations
+
+from typing import Protocol, runtime_checkable
+
+from pydantic import BaseModel
+
+
+class Verdict(BaseModel):
+    """One classifier's opinion about a piece of input."""
+
+    injection_risk: float = 0.0
+    toxicity_risk: float = 0.0
+    active: bool = True
+
+    def exceeds(self, injection: float, toxicity: float) -> list[str]:
+        """Names of the thresholds this verdict crosses."""
+        crossed: list[str] = []
+        if self.injection_risk >= injection:
+            crossed.append("ml_injection")
+        if self.toxicity_risk >= toxicity:
+            crossed.append("ml_toxicity")
+        return crossed
+
+
+@runtime_checkable
+class Classifier(Protocol):
+    """Implement this to activate layer 3."""
+
+    async def classify(self, text: str) -> Verdict: ...
+
+
+class NullClassifier:
+    """The default. Passes everything and says so.
+
+    `active=False` is deliberate: the pipeline reports which layers actually
+    ran, so an inactive layer 3 shows up in logs rather than hiding.
+    """
+
+    async def classify(self, text: str) -> Verdict:
+        return Verdict(injection_risk=0.0, toxicity_risk=0.0, active=False)
+
+
+# Thresholds to apply once a real classifier is wired in. Tune against your own
+# eval set; these are starting points, not defaults to ship unexamined.
+INJECTION_THRESHOLD = 0.85
+TOXICITY_THRESHOLD = 0.80

@@ -1,0 +1,67 @@
+"""SQL guard tests (layer 5)."""
+
+from __future__ import annotations
+
+import pytest
+
+from ${package}.tool_guards import ToolBlocked, enforce_limit, validate_sql
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "DELETE FROM users",
+        "DROP TABLE orders",
+        "UPDATE accounts SET balance = 0",
+        "INSERT INTO logs VALUES (1)",
+        "TRUNCATE TABLE events",
+        "GRANT ALL ON users TO public",
+        "CREATE TABLE x (id int)",
+        "SELECT 1; DROP TABLE users",
+        "SELECT 1 -- ; DROP TABLE users",
+        "SELECT 1 /* sneaky */",
+        "SELECT * FROM t; SELECT * FROM u",
+        "",
+        "   ",
+    ],
+)
+def test_dangerous_or_malformed_sql_blocked(query: str) -> None:
+    with pytest.raises(ToolBlocked):
+        validate_sql(query)
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SELECT id, name FROM users LIMIT 10",
+        "WITH recent AS (SELECT * FROM orders) SELECT * FROM recent",
+        "select count(*) from events",
+        "SELECT * FROM t;",
+        "EXPLAIN SELECT * FROM t",
+    ],
+)
+def test_read_only_sql_allowed(query: str) -> None:
+    assert validate_sql(query)
+
+
+def test_trailing_semicolon_is_normalised_away() -> None:
+    assert validate_sql("SELECT 1;") == "SELECT 1"
+
+
+def test_explain_can_be_disallowed() -> None:
+    with pytest.raises(ToolBlocked):
+        validate_sql("EXPLAIN SELECT 1", allow_explain=False)
+
+
+def test_the_returned_query_is_what_should_execute() -> None:
+    """The validator returns normalised text so the database sees exactly what
+    was approved."""
+    assert validate_sql("  SELECT 1  ;  ") == "SELECT 1"
+
+
+def test_limit_is_appended_when_missing() -> None:
+    assert enforce_limit("SELECT * FROM t", 500) == "SELECT * FROM t LIMIT 500"
+
+
+def test_existing_limit_is_respected() -> None:
+    assert enforce_limit("SELECT * FROM t LIMIT 5") == "SELECT * FROM t LIMIT 5"

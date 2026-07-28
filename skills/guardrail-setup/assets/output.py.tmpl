@@ -1,0 +1,113 @@
+"""Layer 6: output guardrails.
+
+Runs after the model produces an answer and before anyone sees it. Three jobs:
+remove PII, confirm nothing leaked from the system prompt, and check the answer
+is actually supported by what the tools returned.
+"""
+
+from __future__ import annotations
+
+import re
+
+from pydantic import BaseModel, Field
+
+# Order matters: credit cards are matched before phone numbers, because a card
+# number can otherwise be partly consumed by the phone pattern.
+PII_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("CREDIT_CARD", re.compile(r"\b(?:\d[ -]?){13,16}\b")),
+    ("SSN", re.compile(r"\b\d{3}-\d{2}-\d{4}\b")),
+    ("EMAIL", re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")),
+    ("PHONE", re.compile(r"\b(?:\+?\d{1,3}[ -]?)?\(?\d{3}\)?[ .-]?\d{3}[ .-]?\d{4}\b")),
+    ("IPV4", re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")),
+    ("AWS_KEY", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
+    ("BEARER", re.compile(r"\b(?:sk|pk)-[A-Za-z0-9_-]{16,}\b")),
+)
+
+
+class OutputReport(BaseModel):
+    """What the output pipeline found. Log this; alert on the booleans."""
+
+    text: str
+    redactions: dict[str, int] = Field(default_factory=dict)
+    leaked_prompt: bool = False
+    grounded: bool | None = None
+    unsupported_claims: list[str] = Field(default_factory=list)
+
+    @property
+    def clean(self) -> bool:
+        return not self.redactions and not self.leaked_prompt and not self.unsupported_claims
+
+
+def scrub_pii(text: str, allow: frozenset[str] = frozenset()) -> tuple[str, dict[str, int]]:
+    """Mask PII and report counts.
+
+    `allow` holds values that must survive scrubbing — a support address the
+    answer is supposed to contain, for instance.
+    """
+    counts: dict[str, int] = {}
+    for label, pattern in PII_PATTERNS:
+        def _replace(match: re.Match[str], _label: str = label) -> str:
+            if match.group(0) in allow:
+                return match.group(0)
+            counts[_label] = counts.get(_label, 0) + 1
+            return f"[{_label}_REDACTED]"
+
+        text = pattern.sub(_replace, text)
+    return text, counts
+
+
+def leaked_system_prompt(text: str, system_prompt: str, *, shingle: int = 12) -> bool:
+    """Detect verbatim system-prompt fragments echoed into the answer.
+
+    Compares overlapping word windows rather than the whole string, because a
+    leak is almost always a fragment rather than the entire prompt.
+    """
+    if not system_prompt.strip():
+        return False
+    prompt_words = system_prompt.split()
+    haystack = " ".join(text.split()).lower()
+    if len(prompt_words) < shingle:
+        return system_prompt.strip().lower() in haystack
+    for i in range(len(prompt_words) - shingle + 1):
+        if " ".join(prompt_words[i : i + shingle]).lower() in haystack:
+            return True
+    return False
+
+
+def check_grounding(answer: str, tool_outputs: list[str]) -> tuple[bool, list[str]]:
+    """Heuristic grounding: every figure in the answer should appear in a tool result.
+
+    This does not prove the answer is correct. It catches the common failure
+    where the model invents a number the tools never produced. Swap in a
+    model-graded check when the stakes justify the extra call.
+    """
+    if not tool_outputs:
+        return True, []
+    haystack = " ".join(tool_outputs).replace(",", "")
+    numbers = set(re.findall(r"\b\d[\d,]*\.?\d*\b", answer))
+    unsupported = [n for n in numbers if n.replace(",", "") not in haystack]
+    return not unsupported, sorted(unsupported)
+
+
+def validate_output(
+    answer: str,
+    *,
+    system_prompt: str = "",
+    tool_outputs: list[str] | None = None,
+    allow: frozenset[str] = frozenset(),
+) -> OutputReport:
+    """Run the whole output pipeline and return cleaned text plus findings."""
+    text, redactions = scrub_pii(answer, allow)
+    leaked = leaked_system_prompt(text, system_prompt)
+    if leaked:
+        text = "I can't share my configuration.\n\n" + text
+    grounded, unsupported = (
+        check_grounding(text, tool_outputs) if tool_outputs is not None else (None, [])
+    )
+    return OutputReport(
+        text=text,
+        redactions=redactions,
+        leaked_prompt=leaked,
+        grounded=grounded,
+        unsupported_claims=unsupported,
+    )

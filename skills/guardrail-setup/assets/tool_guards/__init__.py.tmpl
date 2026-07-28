@@ -1,0 +1,14 @@
+"""Layer 5: per-tool guards.
+
+Call these from inside the tool that needs them, not from the pipeline — the
+arguments to validate only exist at the call site.
+
+Only the guards selected at generation time are present here. Re-run the
+generator with additional flags to add more.
+"""
+
+from .base import ToolBlocked
+${tool_guard_imports}
+__all__ = [
+    "ToolBlocked",
+${tool_guard_exports}]

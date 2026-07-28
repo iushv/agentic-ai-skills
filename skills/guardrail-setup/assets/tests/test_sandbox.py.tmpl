@@ -1,0 +1,56 @@
+"""Sandbox specification tests (layer 5)."""
+
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+
+from ${package}.tool_guards import SANDBOX_SPEC, ToolBlocked, assert_sandboxed, docker_run_args
+
+
+def test_the_default_spec_is_safe() -> None:
+    assert_sandboxed(SANDBOX_SPEC)
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"network": "bridge"},
+        {"network": "host"},
+        {"user": "root"},
+        {"user": 0},
+        {"user": None},
+        {"read_only_root": False},
+        {"drop_capabilities": False},
+        {"memory_mb": 0},
+        {"memory_mb": None},
+        {"cpu_seconds": -1},
+        {"wall_clock_seconds": None},
+        {"pids_limit": 0},
+    ],
+)
+def test_unsafe_specs_rejected(override: dict[str, Any]) -> None:
+    with pytest.raises(ToolBlocked):
+        assert_sandboxed({**SANDBOX_SPEC, **override})
+
+
+def test_every_problem_is_reported_not_just_the_first() -> None:
+    with pytest.raises(ToolBlocked) as exc:
+        assert_sandboxed({"network": "host", "user": "root"})
+    message = str(exc.value)
+    assert "network" in message and "root" in message
+
+
+def test_docker_args_disable_network_and_privileges() -> None:
+    args = docker_run_args()
+    joined = " ".join(args)
+    assert "--network none" in joined
+    assert "--cap-drop ALL" in joined
+    assert "--read-only" in args
+    assert "no-new-privileges" in joined
+
+
+def test_docker_args_refuse_an_unsafe_spec() -> None:
+    with pytest.raises(ToolBlocked):
+        docker_run_args({**SANDBOX_SPEC, "network": "host"})

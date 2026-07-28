@@ -5,220 +5,134 @@ description: Add a defense-in-depth guardrail pipeline — schema validation, pr
 
 # Guardrail Setup
 
-Generate a complete guardrail pipeline for an agent, covering all 6 defense layers
-from the production blueprint. Includes implementation code and test suite.
+Generate a defence-in-depth guardrail package and drop it into an existing
+project. Six layers, every one with tests that cover both what must be blocked
+and what must still get through.
+
+This skill ships a working generator. Run it rather than pasting snippets.
 
 ## When to Use
 
-- Setting up guardrails for a new agent.
-- Adding missing guardrail layers to an existing agent.
-- Hardening an agent after a security review or incident.
+- Adding guardrails to an agent that has none.
+- Filling in missing layers on an agent that has some.
+- Hardening after a security review, a jailbreak report, or an incident.
 
-## Inputs
+## Generate the package
 
-Provide:
-- **Agent description**: What the agent does.
-- **Tool list**: Tools the agent uses (especially any that execute code or SQL).
-- **Data sensitivity**: What kind of data flows through (PII, financial, medical, etc.).
-- **Existing guardrails** (optional): What's already in place.
+Pick the layer 5 flags that match the risks the agent actually carries:
 
-## The 6-Layer Pipeline
-
-### Layer 1: Schema Validation
-
-**Purpose**: Reject malformed input before any processing.
-
-```python
-from pydantic import BaseModel, Field, field_validator
-
-class AgentInput(BaseModel):
-    query: str = Field(min_length=1, max_length=5000)
-    conversation_id: str = Field(pattern=r"^[a-zA-Z0-9_-]+$")
-
-    @field_validator("query")
-    @classmethod
-    def no_null_bytes(cls, v: str) -> str:
-        if "\x00" in v:
-            raise ValueError("Null bytes not allowed")
-        return v
+```bash
+python scripts/add_guardrails.py --out ./myproject/guardrails --sql --files
 ```
 
-**Tests**: Empty input, oversized input, null bytes, invalid characters.
+| Flag | Add it when |
+|---|---|
+| `--sql` | any tool issues SQL |
+| `--files` | any tool reads or writes files |
+| `--code-exec` | any tool runs model-supplied code |
+| `--all-guards` | all three |
 
-### Layer 2: Content Filtering
+Other options: `--package` (importable name, defaults to the directory name),
+`--max-query-chars` (layer 1 ceiling, default 5000), `--dry-run`, `--force`.
 
-**Purpose**: Detect known injection patterns via regex.
+Then run the tests, which need only `pytest` and `pydantic`:
 
-Patterns to detect and block:
-- `ignore previous instructions` (case-insensitive).
-- `system:`, `<|im_start|>`, `[INST]` — role injection.
-- Base64-encoded payloads longer than 100 chars.
-- HTML/script tags: `<script>`, `javascript:`, `on\w+=`.
-- URL-based exfiltration: `fetch(`, `curl `, `wget `.
-
-```python
-import re
-
-INJECTION_PATTERNS = [
-    re.compile(r"ignore\s+(all\s+)?previous\s+instructions", re.IGNORECASE),
-    re.compile(r"(system|assistant)\s*:", re.IGNORECASE),
-    re.compile(r"<\|im_start\|>", re.IGNORECASE),
-    re.compile(r"\[INST\]", re.IGNORECASE),
-    re.compile(r"<script[\s>]", re.IGNORECASE),
-    re.compile(r"javascript\s*:", re.IGNORECASE),
-    re.compile(r"\bon\w+\s*=", re.IGNORECASE),
-    re.compile(r"(fetch|curl|wget)\s*\(", re.IGNORECASE),
-]
-
-def check_injection(text: str) -> list[str]:
-    return [p.pattern for p in INJECTION_PATTERNS if p.search(text)]
+```bash
+pytest ./myproject/guardrails
 ```
 
-**Tests**: Each pattern with positive and negative examples.
+A minimal package is 13 files and 53 tests; with every guard it is 19 files and
+108 tests. If they do not pass, stop and fix that before wiring anything up.
 
-### Layer 3: ML Classification (Optional)
-
-**Purpose**: Catch sophisticated injection and toxic content.
-
-Integration points:
-- **Prompt injection classifier**: Hugging Face `protectai/deberta-v3-base-prompt-injection-v2`.
-- **Toxicity filter**: Meta LlamaGuard or OpenAI moderation endpoint.
-
-```python
-async def classify_input(text: str) -> dict:
-    injection_score = await injection_classifier.predict(text)
-    toxicity_score = await toxicity_classifier.predict(text)
-    return {
-        "injection_risk": injection_score > 0.85,
-        "toxicity_risk": toxicity_score > 0.80,
-    }
-```
-
-**Tests**: Known injection corpus, benign queries that should pass.
-
-### Layer 4: Semantic Analysis
-
-**Purpose**: Detect intent-level threats that bypass pattern matching.
-
-Checks:
-- Data exfiltration intent: asking to send data to external URLs.
-- Privilege escalation: asking to modify permissions or access controls.
-- System prompt extraction: asking to repeat or reveal instructions.
-
-```python
-EXFIL_KEYWORDS = ["send to", "post to", "email to", "upload to", "webhook"]
-ESCALATION_KEYWORDS = ["admin", "root", "sudo", "bypass", "override"]
-EXTRACTION_KEYWORDS = ["system prompt", "instructions", "repeat your", "what are your rules"]
-
-def semantic_check(text: str) -> list[str]:
-    text_lower = text.lower()
-    flags = []
-    if any(kw in text_lower for kw in EXFIL_KEYWORDS):
-        flags.append("potential_exfiltration")
-    if any(kw in text_lower for kw in ESCALATION_KEYWORDS):
-        flags.append("potential_escalation")
-    if any(kw in text_lower for kw in EXTRACTION_KEYWORDS):
-        flags.append("potential_extraction")
-    return flags
-```
-
-**Tests**: Known attack phrases, benign queries with similar words.
-
-### Layer 5: Tool Guardrails
-
-**Purpose**: Validate and constrain tool execution.
-
-Per-tool rules:
-- **SQL tools**: Allow only SELECT/WITH. Block mutation keywords.
-- **Code execution**: Sandbox with network=none, memory limit, timeout.
-- **File access**: No path traversal (`..`), whitelist allowed directories.
-- **API calls**: Rate limit per tool, per user.
-
-```python
-SQL_BLOCKED = re.compile(
-    r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|GRANT|REVOKE)\b",
-    re.IGNORECASE,
-)
-
-def validate_sql(query: str) -> bool:
-    if SQL_BLOCKED.search(query):
-        raise ValueError(f"Mutation SQL blocked: {query[:100]}")
-    if not query.strip().upper().startswith(("SELECT", "WITH")):
-        raise ValueError("Query must start with SELECT or WITH")
-    return True
-```
-
-**Tests**: All blocked keywords, valid SELECT queries, edge cases (comments, subqueries).
-
-### Layer 6: Output Guardrails
-
-**Purpose**: Sanitize agent output before returning to user.
-
-Checks:
-- **PII scrubbing**: Detect and mask emails, phone numbers, SSNs, credit cards.
-- **Schema validation**: Output matches expected response model.
-- **System prompt leak**: Output doesn't contain system prompt fragments.
-- **Grounding check**: Claims are supported by tool results.
-
-```python
-import re
-
-PII_PATTERNS = {
-    "email": re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b"),
-    "phone": re.compile(r"\b\d{3}[-.]?\d{3}[-.]?\d{4}\b"),
-    "ssn": re.compile(r"\b\d{3}-\d{2}-\d{4}\b"),
-    "credit_card": re.compile(r"\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b"),
-}
-
-def scrub_pii(text: str) -> str:
-    for name, pattern in PII_PATTERNS.items():
-        text = pattern.sub(f"[{name.upper()}_REDACTED]", text)
-    return text
-```
-
-**Tests**: Strings with PII, clean strings, edge cases (partial matches).
-
-## Generated File Structure
+## What gets generated
 
 ```
 guardrails/
-├── __init__.py
-├── input.py          # Layers 1-4: schema, content filter, ML, semantic
-├── output.py         # Layer 6: PII, schema, grounding
-├── tool_guards.py    # Layer 5: per-tool validation
-└── tests/
-    ├── test_input.py
-    ├── test_output.py
-    └── test_tool_guards.py
+├── schema.py           # L1: length, null bytes, unicode normalisation
+├── content_filter.py   # L2: injection patterns, untrusted-content fencing
+├── classifier.py       # L3: seam + NullClassifier (see below)
+├── semantic.py         # L4: exfiltration, escalation, prompt extraction
+├── output.py           # L6: PII, prompt-leak, grounding
+├── pipeline.py         # Orchestrates 1-4 in, 6 out
+├── tool_guards/        # L5: only the guards you asked for
+│   ├── sql.py          #     read-only enforcement, LIMIT injection
+│   ├── paths.py        #     traversal confinement, executable-write refusal
+│   └── sandbox.py      #     sandbox spec assertions, docker flag rendering
+└── tests/              # Blocking and passing cases for every layer
 ```
 
-## Integration Pattern
+Templates live in `assets/`. Read one there rather than guessing.
 
-Wire the pipeline into the agent loop:
+## Wiring it in
 
 ```python
-async def handle_request(query: str) -> str:
-    # Input pipeline (layers 1-4)
-    validated = AgentInput(query=query)           # Layer 1
-    injections = check_injection(validated.query)  # Layer 2
-    if injections:
-        return "Request blocked: suspicious content detected."
-    flags = semantic_check(validated.query)         # Layer 4
-    if "potential_exfiltration" in flags:
-        return "Request blocked: data exfiltration attempt."
+from guardrails import GuardrailPipeline, GuardrailBlocked
 
-    # Agent processing with tool guardrails (layer 5)
-    result = await agent.run(validated.query)
+pipeline = GuardrailPipeline(system_prompt=SYSTEM_PROMPT)
 
-    # Output pipeline (layer 6)
-    result.answer = scrub_pii(result.answer)
-    return result.answer
+try:
+    report = await pipeline.check_input(user_query)
+except GuardrailBlocked as exc:
+    log.warning("blocked at %s: %s", exc.layer, exc.reasons)
+    return "I can't process that request."
+
+answer, tool_outputs = await run_agent(report.validated.query)
+
+out = pipeline.check_output(answer, tool_outputs=tool_outputs)
+return out.text
 ```
 
-## Test Coverage Requirements
+Layer 5 is not called from the pipeline. Tool arguments only exist at the call
+site, so guards go inside each tool:
 
-Each guardrail layer must have:
-- At least 5 positive tests (should block).
-- At least 5 negative tests (should pass).
-- Edge case tests (unicode, empty strings, max-length inputs).
-- Performance test (< 10ms per check for layers 1-2, < 100ms for layer 3).
+```python
+from guardrails.tool_guards import validate_sql
+
+safe = validate_sql(query)    # raises ToolBlocked
+return await db.fetch(safe)   # execute the returned string, not the original
+```
+
+Catch `ToolBlocked` in the agent loop and return it to the model as a tool
+error, so it can correct itself instead of seeing an opaque crash.
+
+## Design decisions worth keeping
+
+These are load-bearing. Changing them weakens the pipeline in ways that are not
+obvious from reading the code.
+
+- **Order is cheap-to-expensive.** Deterministic checks run before the
+  model-backed one, so an obvious attack never costs an inference call. A test
+  asserts this.
+- **Layer 3 ships inactive and says so.** `NullClassifier` reports
+  `active=False`, which surfaces in `InputReport.layers_run`. A stub that
+  silently approves everything is worse than no layer, because it looks like
+  coverage.
+- **Not every flag blocks.** Exfiltration and prompt extraction block;
+  escalation wording is advisory, because "who has admin access here" is a
+  normal question. Blocking everything produces an outage, not a guardrail.
+- **SQL comments are rejected, not stripped.** Stripping would leave the
+  validator reasoning about different text than the database executes.
+  `validate_sql` returns normalised SQL — execute that, not the original.
+- **Output guardrails never raise.** A bad answer is cleaned and reported. A
+  dropped answer is an outage.
+
+## After generating
+
+1. **Tune the pattern lists** in `content_filter.py` and `semantic.py` against
+   your own traffic. When you add a pattern, add a benign phrase that must
+   still pass alongside it.
+2. **Implement layer 3** if the agent is exposed to untrusted users. The seam
+   is already wired; supply a `Classifier`.
+3. **Set alerts** on block rate per layer. A sudden rise is either an attack or
+   a regression, and both are worth a page.
+4. **Feed incidents back.** Every jailbreak that gets through should leave a
+   test behind.
+
+Then run `/agentic-design-review` to check the rest of the agent.
+
+## Extending the templates
+
+Edit `assets/`, not generated output. Templates use `string.Template` syntax
+(`${name}`), so a literal dollar sign must be written `$$` — the regex anchors
+in `schema.py.tmpl` are the example to copy. After editing, regenerate in both
+the minimal and `--all-guards` configurations and run both test suites.

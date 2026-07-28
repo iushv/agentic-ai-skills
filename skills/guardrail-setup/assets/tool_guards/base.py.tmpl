@@ -1,0 +1,11 @@
+"""Shared base for layer 5 tool guards."""
+
+from __future__ import annotations
+
+
+class ToolBlocked(PermissionError):
+    """Raised when a tool call is rejected before it executes.
+
+    Catch this in the agent loop and return it to the model as a tool error, so
+    it can correct itself rather than seeing an opaque crash.
+    """

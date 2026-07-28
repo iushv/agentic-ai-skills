@@ -1,0 +1,53 @@
+"""Layer 1: schema validation.
+
+The cheapest layer, and the one that must run first. Everything downstream
+assumes it is working on a string of bounded length with no control characters.
+"""
+
+from __future__ import annotations
+
+import unicodedata
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+MAX_QUERY_CHARS = ${max_query_chars}
+
+
+class GuardrailBlocked(ValueError):
+    """Raised when input fails any layer. Carries reasons for logging."""
+
+    def __init__(self, reasons: list[str], layer: str) -> None:
+        super().__init__(f"blocked at {layer}: {'; '.join(reasons)}")
+        self.reasons = reasons
+        self.layer = layer
+
+
+class AgentInput(BaseModel):
+    """Reject malformed input before anything expensive happens."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = Field(min_length=1, max_length=MAX_QUERY_CHARS)
+    # Anchored at both ends. Pydantic v2 matches with the Rust regex engine,
+    # which searches rather than fullmatches, so a trailing anchor is required.
+    conversation_id: str = Field(
+        default="default", pattern=r"^[A-Za-z0-9_-]{1,64}$$"
+    )
+
+    @field_validator("query")
+    @classmethod
+    def _clean(cls, v: str) -> str:
+        if "\x00" in v:
+            raise ValueError("null bytes are not allowed")
+        # Normalise first so homoglyph and compatibility-form tricks collapse
+        # before the pattern layer inspects the text.
+        normalised = unicodedata.normalize("NFKC", v)
+        if not normalised.strip():
+            raise ValueError("query is empty after normalisation")
+        # Strip control characters except tab and newline.
+        cleaned = "".join(
+            c for c in normalised if c in "\t\n" or unicodedata.category(c)[0] != "C"
+        )
+        if not cleaned.strip():
+            raise ValueError("query is empty after removing control characters")
+        return cleaned
