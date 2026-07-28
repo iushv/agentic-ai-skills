@@ -13,9 +13,29 @@ Windsurf, and Aider — active only when you're building agentic AI.
   observability, cost, testing).
 - **5 Skills** — Reusable workflows for design review, scaffolding, tool design,
   debugging, and guardrail setup.
+- **A working generator** — `agent-scaffold` is not prose. It ships templates and a
+  script that emit a runnable agent project whose test suite passes offline.
 - **Evals** — 15 graded test cases (3 per skill) so skill changes are measured, not
   guessed at.
 - **Auto-sync** — One script generates contextual rule files for every supported tool.
+
+## Scaffold an agent
+
+```bash
+python skills/agent-scaffold/scripts/scaffold.py \
+  --name analytics_agent --out ./analytics_agent \
+  --tools run_sql,create_chart \
+  --description "answers business questions over the analytics warehouse"
+
+cd analytics_agent && pip install -e '.[dev]' && pytest
+```
+
+That produces 20 files — ReAct loop, budget config, six-layer guardrail pipeline,
+retry with circuit breaker and model fallback, structured tracing, and 68 tests
+that drive the real loop against a fake model. No API key needed to run them.
+
+CI generates a project on every push, byte-compiles it, and runs its suite, so
+the templates cannot rot silently.
 
 ## Quick Start
 
@@ -180,8 +200,8 @@ bash agentic-ai-skills/scripts/sync-rules.sh --clean-stale
 
 | Source | Target (at project root) | Tool | Activation |
 |--------|--------------------------|------|------------|
-| `skills/*/SKILL.md` | `<root>/.claude/skills/*/SKILL.md` | Claude Code | Auto-discovered, lazy-loaded |
-| `skills/*/SKILL.md` | `<root>/.agents/skills/*/SKILL.md` | Codex | Lazy metadata-first |
+| `skills/*/` | `<root>/.claude/skills/*/` | Claude Code | Auto-discovered, lazy-loaded |
+| `skills/*/` | `<root>/.agents/skills/*/` | Codex | Lazy metadata-first |
 | `AGENTS.md` | `<root>/.cursor/rules/agentic-ai.mdc` | Cursor | `alwaysApply: false` (model decides) |
 | `AGENTS.md` | `<root>/.windsurf/rules/agentic-ai.md` | Windsurf | `trigger: model_decision` |
 | `AGENTS.md` | `<root>/.github/instructions/agentic-ai.instructions.md` | Copilot | `applyTo` glob |
@@ -193,10 +213,11 @@ bash agentic-ai-skills/scripts/sync-rules.sh --clean-stale
 3. SKILL.md frontmatter has `name` and `description`
 4. No absolute local paths in any file
 5. Generated files match canonical source
-6. Skill mirrors are byte-identical
+6. Skill mirrors match the canonical directory, bundled resources included
 7. Mirror frontmatter integrity (starts with `---`)
 8. Generated rule frontmatter schema (tool-specific keys)
 9. CLAUDE.md safety audit (sync script never references root CLAUDE.md)
+10. Bundled Python scripts parse
 
 ## Project Structure
 
@@ -216,6 +237,10 @@ your-project/
 │   │   │   ├── SKILL.md                     # Canonical skill source
 │   │   │   └── evals/evals.json             # Graded test cases
 │   │   ├── agent-scaffold/
+│   │   │   ├── SKILL.md
+│   │   │   ├── scripts/scaffold.py          # The generator
+│   │   │   ├── assets/                      # Templates it renders
+│   │   │   └── evals/evals.json
 │   │   ├── tool-schema-design/
 │   │   ├── agent-debug/
 │   │   └── guardrail-setup/

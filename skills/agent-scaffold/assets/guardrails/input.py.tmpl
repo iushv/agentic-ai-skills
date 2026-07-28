@@ -1,0 +1,121 @@
+"""Input guardrails for ${agent_name} (defence layers 1, 2 and 4).
+
+Layer 3 (ML classification) is left as an integration point rather than a stub
+implementation: wiring a real classifier is a deployment decision, and a fake
+one that always passes is worse than none at all.
+"""
+
+from __future__ import annotations
+
+import re
+import unicodedata
+
+from pydantic import BaseModel, Field, field_validator
+
+
+class GuardrailBlocked(ValueError):
+    """Raised when input fails a guardrail. Carries the reasons for logging."""
+
+    def __init__(self, reasons: list[str]) -> None:
+        super().__init__("; ".join(reasons))
+        self.reasons = reasons
+
+
+# --- Layer 1: schema validation -----------------------------------------
+
+
+class AgentInput(BaseModel):
+    """Reject malformed input before any processing happens."""
+
+    query: str = Field(min_length=1, max_length=5000)
+    # Anchored at both ends: Pydantic v2 matches with the Rust regex engine,
+    # which searches rather than fullmatches. `$$` renders to a literal `$`.
+    conversation_id: str = Field(
+        default="default", pattern=r"^[A-Za-z0-9_-]{1,64}$$"
+    )
+
+    @field_validator("query")
+    @classmethod
+    def _no_control_chars(cls, v: str) -> str:
+        if "\x00" in v:
+            raise ValueError("null bytes are not allowed")
+        # Normalise so homoglyph and compatibility tricks collapse before the
+        # regex layer sees the text.
+        normalised = unicodedata.normalize("NFKC", v)
+        if not normalised.strip():
+            raise ValueError("query is empty after normalisation")
+        return normalised
+
+
+# --- Layer 2: content filtering -----------------------------------------
+
+INJECTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("instruction_override", re.compile(
+        r"ignore\s+(all\s+|any\s+)?(previous|prior|above)\s+instructions", re.I)),
+    ("role_injection", re.compile(r"^\s*(system|assistant)\s*:", re.I | re.M)),
+    ("chat_template", re.compile(r"<\|im_(start|end)\|>|\[/?INST\]", re.I)),
+    ("script_tag", re.compile(r"<\s*script[\s>]", re.I)),
+    ("js_uri", re.compile(r"javascript\s*:", re.I)),
+    ("inline_handler", re.compile(r"\bon(click|load|error|mouseover)\s*=", re.I)),
+    ("remote_fetch", re.compile(r"\b(fetch|curl|wget)\s*[\(\s]https?://", re.I)),
+    ("long_base64", re.compile(r"[A-Za-z0-9+/]{120,}={0,2}")),
+)
+
+
+def check_injection(text: str) -> list[str]:
+    """Return the names of every injection pattern that matched."""
+    return [name for name, pattern in INJECTION_PATTERNS if pattern.search(text)]
+
+
+# --- Layer 4: semantic analysis -----------------------------------------
+
+EXFIL_KEYWORDS = ("send to", "post to", "email to", "upload to", "webhook")
+ESCALATION_KEYWORDS = ("sudo", "bypass", "override", "disable the", "grant me")
+EXTRACTION_KEYWORDS = (
+    "system prompt",
+    "your instructions",
+    "repeat your",
+    "what are your rules",
+)
+
+
+def semantic_flags(text: str) -> list[str]:
+    """Intent-level checks for threats that survive pattern matching."""
+    lowered = text.lower()
+    flags: list[str] = []
+    if any(k in lowered for k in EXFIL_KEYWORDS):
+        flags.append("potential_exfiltration")
+    if any(k in lowered for k in ESCALATION_KEYWORDS):
+        flags.append("potential_escalation")
+    if any(k in lowered for k in EXTRACTION_KEYWORDS):
+        flags.append("potential_prompt_extraction")
+    return flags
+
+
+# --- Pipeline ------------------------------------------------------------
+
+# Flags that block outright. Others are recorded for review but allowed
+# through, because blocking on them alone produces too many false positives.
+BLOCKING_FLAGS = frozenset({"potential_exfiltration", "potential_prompt_extraction"})
+
+
+def validate_input(query: str, conversation_id: str = "default") -> AgentInput:
+    """Run layers 1, 2 and 4 in order. Raises GuardrailBlocked on rejection."""
+    validated = AgentInput(query=query, conversation_id=conversation_id)
+
+    if matches := check_injection(validated.query):
+        raise GuardrailBlocked([f"injection:{m}" for m in matches])
+
+    if blocking := BLOCKING_FLAGS.intersection(semantic_flags(validated.query)):
+        raise GuardrailBlocked(sorted(blocking))
+
+    return validated
+
+
+def wrap_untrusted(content: str, source: str = "external") -> str:
+    """Fence third-party content so the model treats it as data, not instructions."""
+    return (
+        f'<untrusted_content source="{source}">\n'
+        f"{content}\n"
+        "</untrusted_content>"
+    )

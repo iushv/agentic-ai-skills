@@ -1,0 +1,95 @@
+"""Tracing for ${agent_name}.
+
+Emits one structured event per step. The default sink writes JSON lines to a
+logger, which is enough to debug a run from production logs alone. Swap in
+Langfuse or LangSmith by passing a different `emit` callable.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import time
+from collections.abc import Callable
+from contextlib import contextmanager
+from typing import Any, Iterator
+
+from models import AgentRun, AgentStep, StepKind, Usage
+
+logger = logging.getLogger("${agent_name}.trace")
+
+Emitter = Callable[[dict[str, Any]], None]
+
+
+def log_emitter(event: dict[str, Any]) -> None:
+    """Default sink: one JSON object per line, at INFO."""
+    logger.info(json.dumps(event, default=str, separators=(",", ":")))
+
+
+class Tracer:
+    """Records steps onto an AgentRun and forwards them to a sink."""
+
+    def __init__(self, run: AgentRun, emit: Emitter = log_emitter) -> None:
+        self.run = run
+        self.emit = emit
+
+    def event(self, event_name: str, **fields: Any) -> None:
+        # Named `event_name`, not `name`, so callers can pass a `name=` field
+        # without colliding with this parameter.
+        self.emit({"run_id": self.run.run_id, "event": event_name, **fields})
+
+    @contextmanager
+    def step(self, kind: StepKind, name: str, **detail: Any) -> Iterator[AgentStep]:
+        """Time a step, record it on the run, and emit start/end events.
+
+        The step is recorded even when the body raises, so a failed run still
+        has a complete trace. That is the whole point of tracing.
+        """
+        step = AgentStep(
+            index=len(self.run.steps), kind=kind, name=name, detail=detail
+        )
+        started = time.perf_counter()
+        self.event("step.start", index=step.index, kind=kind.value, name=name)
+        try:
+            yield step
+        except BaseException as exc:  # noqa: BLE001 - recorded then re-raised
+            step.error = f"{type(exc).__name__}: {exc}"
+            raise
+        finally:
+            step.duration_ms = (time.perf_counter() - started) * 1000
+            self.run.record(step)
+            self.event(
+                "step.end",
+                index=step.index,
+                kind=kind.value,
+                name=name,
+                duration_ms=round(step.duration_ms, 2),
+                error=step.error,
+                **step.usage.model_dump(),
+            )
+
+    def run_started(self) -> None:
+        self.event("run.start", query_chars=len(self.run.query))
+
+    def run_finished(self) -> None:
+        self.event(
+            "run.end",
+            status=self.run.status,
+            iterations=self.run.iterations,
+            tool_calls=self.run.tool_calls,
+            degradation_level=self.run.degradation_level,
+            **self.run.usage.model_dump(),
+        )
+
+
+def usage_from_response(response: Any, cost_usd: float = 0.0) -> Usage:
+    """Adapt an Anthropic response's usage block into our Usage model."""
+    raw = getattr(response, "usage", None)
+    if raw is None:
+        return Usage(cost_usd=cost_usd)
+    return Usage(
+        input_tokens=getattr(raw, "input_tokens", 0) or 0,
+        output_tokens=getattr(raw, "output_tokens", 0) or 0,
+        cache_read_tokens=getattr(raw, "cache_read_input_tokens", 0) or 0,
+        cost_usd=cost_usd,
+    )

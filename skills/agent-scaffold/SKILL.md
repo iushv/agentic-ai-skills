@@ -5,128 +5,129 @@ description: Generate a production-ready agent skeleton — agent loop, tool sch
 
 # Agent Scaffold
 
-Generate a complete, production-ready agent project structure from a task description.
-Output includes the agent loop, tool schemas, guardrail pipeline, config, and test stubs.
+Generate a complete agent project: the ReAct loop, tool schemas, a six-layer
+guardrail pipeline, budget enforcement, retry and fallback, tracing, and a test
+suite that runs without an API key.
+
+This skill ships a working generator. Run it rather than writing the structure
+out by hand.
 
 ## When to Use
 
 - Starting a new agent project from scratch.
-- Adding a new agent to an existing multi-agent system.
-- Prototyping an agent to validate tool design before full implementation.
+- Adding an agent to an existing system.
+- Prototyping to validate tool design before committing to an implementation.
 
-## Inputs
+## Generate the project
 
-Provide:
-- **Task description**: What the agent should accomplish.
-- **Tool list**: Names and brief descriptions of tools the agent needs.
-- **Architecture level** (optional): Override auto-detection. Default: auto-select.
-- **Model** (optional): Primary model to use. Default: claude-sonnet-5.
+```bash
+python scripts/scaffold.py \
+  --name analytics_agent \
+  --out ./analytics_agent \
+  --tools run_sql,create_chart \
+  --description "answers business questions over the analytics warehouse"
+```
 
-## Architecture Level Selection
+Then confirm it works before changing anything:
 
-Auto-select based on inputs:
-- No tools mentioned → Level 0 (single call) or Level 1 (chain).
-- Fixed tool sequence → Level 1 (chain) or Level 2 (router).
-- Dynamic tool use → Level 3 (ReAct).
-- Different permissions needed → Level 4 (multi-agent). Requires justification.
+```bash
+cd analytics_agent && pip install -e '.[dev]' && pytest
+```
 
-## Generated Structure
+The generated suite drives the real agent loop against a fake model, so it
+passes offline with no key. If it does not pass, stop and fix that first.
+
+### Options
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--name` | required | snake_case identifier for the agent |
+| `--out` | required | output directory |
+| `--tools` | required | comma-separated `verb_noun` names, 1-7 of them |
+| `--description` | generic | one line, used in the system prompt and README |
+| `--level` | `3` | architecture level 0-5 |
+| `--model` | `claude-sonnet-5` | primary model |
+| `--fallback-model` | `claude-haiku-4-5` | second model in the fallback chain |
+| `--dry-run` | off | list the files without writing them |
+| `--force` | off | overwrite a non-empty directory |
+
+The generator refuses more than 7 tools and warns when a tool name is not
+`verb_noun`, when level 4+ is requested without a permission split, and when
+tools are requested at a level that has no dynamic tool selection.
+
+## Choosing the level before you generate
+
+Pass `--level` deliberately. Auto-defaulting to 3 is right for most agents but
+wrong for the two ends:
+
+- No tools needed, single turn → **L0**. Do not scaffold an agent; make one call.
+- Fixed, predictable sequence → **L1/L2**. A chain or router, not a loop.
+- Dynamic tool selection → **L3**. The default.
+- Genuinely different permissions or models per step → **L4**. Needs justification.
+- Open-ended exploration → **L5**. Rare, and expensive to get right.
+
+## What gets generated
 
 ```
-{agent_name}/
-├── agent.py           # Main agent loop (ReAct or chain)
-├── config.py          # AgentConfig with all budget limits
+{name}/
+├── main.py              # Entrypoint: wires tools, prints answer + cost
+├── agent.py             # ReAct loop: budgets, guardrails, degradation
+├── config.py            # AgentConfig — every limit, checked before each call
+├── models.py            # AgentRun, AgentStep, ToolResult, Usage
+├── reliability.py       # Backoff with jitter, circuit breaker, fallback chain
+├── tracing.py           # One structured event per step
 ├── tools/
-│   ├── __init__.py
-│   └── {tool_name}.py # One file per tool with Pydantic schema
+│   ├── __init__.py      # BaseTool contract + registry with the 7-tool ceiling
+│   └── {tool}.py        # One per --tools entry, constrained schema, stub body
 ├── guardrails/
-│   ├── __init__.py
-│   ├── input.py       # Input validation pipeline (layers 1-4)
-│   └── output.py      # Output validation pipeline (layer 6)
-├── models.py          # Shared data models (AgentStep, AgentRun)
-├── tracing.py         # Observability setup (Langfuse/LangSmith)
+│   ├── input.py         # Layers 1, 2, 4: schema, injection, semantic intent
+│   ├── output.py        # Layer 6: PII, prompt-leak, grounding
+│   └── tool_guards.py   # Layer 5: read-only SQL, path confinement, sandbox
 ├── tests/
-│   ├── test_tools.py      # Unit tests for each tool
-│   ├── test_guardrails.py # Unit tests for guardrails
-│   ├── test_agent.py      # Integration tests with mock LLM
-│   └── evals/
-│       └── golden.yaml    # Golden trajectory test cases
-└── pyproject.toml     # Dependencies
+│   ├── conftest.py      # Fake Anthropic client and tools
+│   ├── test_tools.py    # Registry and BaseTool contract
+│   ├── test_guardrails.py
+│   ├── test_agent.py    # Loop integration against the fake model
+│   └── evals/golden.yaml
+└── pyproject.toml
 ```
 
-## Config Template
+Templates live in `assets/`. Read one there rather than guessing at what the
+generator emits.
 
-Every generated agent includes these enforced limits:
+## What the generated loop already enforces
 
-```python
-class AgentConfig(BaseModel):
-    max_iterations: int = Field(default=10, le=50)
-    max_tool_calls: int = Field(default=25, le=100)
-    max_tokens: int = Field(default=100_000)
-    max_cost_usd: float = Field(default=0.50)
-    timeout_seconds: int = Field(default=120, le=600)
-    model: str = "claude-sonnet-5"
-    fallback_models: list[str] = ["claude-haiku-4-5"]
-    # Reasoning depth. Prefer adaptive thinking + effort over a fixed token budget.
-    effort: Literal["low", "medium", "high", "xhigh", "max"] = "high"
-    # Optional server-side pacing for agentic loops. Distinct from max_tokens:
-    # the model sees this countdown and wraps up gracefully instead of truncating.
-    task_budget_tokens: int | None = None
-```
+1. Budgets checked **before** every model call — iterations, tool calls, cost,
+   tokens, and wall clock. A limit you discover after the fact is a bill.
+2. Tool arguments validated against a constrained schema; failures return a
+   tool error the model can recover from, not an exception.
+3. Tool output truncated at 10,000 chars before it re-enters the context.
+4. All parallel tool results returned in a **single** user turn. Splitting them
+   trains the model to stop making parallel calls.
+5. Retry with jittered backoff, a per-provider circuit breaker, and a model
+   fallback chain that skips open circuits.
+6. Graceful degradation: full agent → no tools → honest apology. Never a
+   silent failure.
+7. Adaptive thinking plus `effort`, never a fixed `budget_tokens` — current
+   models reject that outright.
 
-## Tool Template
+## After generating
 
-Each tool follows the six design principles:
+The scaffold is a skeleton with correct bones, not a finished agent. In order:
 
-```python
-class {ToolName}Tool(BaseModel):
-    """{Rich description with WHEN/WHAT/edge cases.}"""
-    {param}: {type} = Field(
-        description="{Clear description}",
-        # Constrained: enum, min/max, pattern
-    )
-```
+1. **Implement `execute` in each tool.** They return stubs.
+2. **Rewrite each tool's `description`.** The model selects tools from these,
+   so the TODO placeholders are the single biggest source of wrong-tool bugs.
+   State when to use it, when not to, what it returns, and its limits.
+3. **Fill in `tests/evals/golden.yaml`** with real questions and expected tools.
+4. **Point `tracing.py` at Langfuse or LangSmith** instead of the logging sink.
+5. **Set alerts** on error rate, cost per hour, P95 latency, and provider outage.
 
-## ReAct Loop Template
+Then run `/agentic-design-review` against the result before shipping it.
 
-The generated loop includes:
-1. Budget checks before every LLM call (cost, tokens, iterations, timeout).
-2. Tool call execution through guardrail pipeline.
-3. Output truncation for large tool results (10,000 char limit).
-4. Structured tracing for every step.
-5. Circuit breaker and model fallback.
-6. Graceful degradation on repeated failures.
+## Extending the templates
 
-## Guardrail Pipeline Template
-
-**Input pipeline:**
-1. Pydantic schema validation with length limits.
-2. Regex filtering for injection patterns.
-3. Optional ML classifier integration point.
-4. Semantic analysis hook.
-
-**Output pipeline:**
-1. PII scrubbing (regex-based, configurable patterns).
-2. Schema validation against expected output type.
-3. Grounding check stub (verify claims against tool results).
-
-## Test Stubs
-
-**Unit tests**: One test per tool verifying:
-- Valid input produces expected output.
-- Invalid input raises appropriate error.
-- Edge cases are handled (empty input, max-length input).
-
-**Guardrail tests**: Verify:
-- SQL injection attempts are blocked.
-- Prompt injection attempts are blocked.
-- PII is scrubbed from outputs.
-- Schema violations are caught.
-
-**Integration tests**: Verify:
-- Mock LLM → agent calls correct tools → produces answer.
-- Agent stops at max_iterations.
-- Fallback activates when primary model fails.
-
-**Eval template**: YAML format with fields:
-- `question`, `expected_tools`, `expected_keywords`, `max_tool_calls`, `max_cost`.
+To change what every future agent gets, edit `assets/` — not the generated
+output. Templates use `string.Template` syntax (`${name}`), so a literal dollar
+sign must be written `$$`. After editing, regenerate and run the generated test
+suite; that is what catches a broken template.

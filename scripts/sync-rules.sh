@@ -90,27 +90,37 @@ generate() {
   fi
 }
 
-# --- Helper: copy skill mirror (byte-identical) ---
-mirror_skill() {
-  local src="$1"
-  local dest="$2"
+# --- Helper: mirror a whole skill directory (byte-identical) ---
+# Skills bundle resources alongside SKILL.md (assets/, scripts/, evals/).
+# Mirroring only SKILL.md would leave those behind and break the skill's own
+# references, so the entire directory is copied.
+DIFF_EXCLUDES=(-x '__pycache__' -x '*.pyc' -x '.DS_Store')
+
+mirror_skill_dir() {
+  local src_dir="${1%/}"
+  local dest_dir="${2%/}"
 
   if [ "$MODE" = "check" ]; then
-    if [ ! -f "$dest" ]; then
-      echo "MISSING: $dest" >&2
+    if [ ! -d "$dest_dir" ]; then
+      echo "MISSING: $dest_dir" >&2
       ERRORS=$((ERRORS + 1))
       return
     fi
-    if ! cmp -s "$src" "$dest"; then
-      echo "OUT OF SYNC (not byte-identical): $dest" >&2
+    if ! diff -r "${DIFF_EXCLUDES[@]}" "$src_dir" "$dest_dir" >/dev/null 2>&1; then
+      echo "OUT OF SYNC: $dest_dir" >&2
+      diff -r "${DIFF_EXCLUDES[@]}" "$src_dir" "$dest_dir" >&2 || true
       ERRORS=$((ERRORS + 1))
     else
-      echo "OK: $dest"
+      echo "OK: $dest_dir"
     fi
   else
-    mkdir -p "$(dirname "$dest")"
-    cp "$src" "$dest"
-    echo "WROTE: $dest"
+    rm -rf "$dest_dir"
+    mkdir -p "$(dirname "$dest_dir")"
+    cp -R "$src_dir" "$dest_dir"
+    # Never mirror build artefacts.
+    find "$dest_dir" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
+    find "$dest_dir" -name '*.pyc' -delete 2>/dev/null || true
+    echo "WROTE: $dest_dir"
   fi
 }
 
@@ -168,9 +178,8 @@ fi
 if tool_enabled "claude"; then
   for skill_dir in "$PKG_DIR"/skills/*/; do
     skill_name="$(basename "$skill_dir")"
-    src="$skill_dir/SKILL.md"
-    if [ -f "$src" ]; then
-      mirror_skill "$src" "$PROJECT_ROOT/.claude/skills/$skill_name/SKILL.md"
+    if [ -f "$skill_dir/SKILL.md" ]; then
+      mirror_skill_dir "$skill_dir" "$PROJECT_ROOT/.claude/skills/$skill_name"
     fi
   done
 fi
@@ -181,9 +190,8 @@ fi
 if tool_enabled "codex"; then
   for skill_dir in "$PKG_DIR"/skills/*/; do
     skill_name="$(basename "$skill_dir")"
-    src="$skill_dir/SKILL.md"
-    if [ -f "$src" ]; then
-      mirror_skill "$src" "$PROJECT_ROOT/.agents/skills/$skill_name/SKILL.md"
+    if [ -f "$skill_dir/SKILL.md" ]; then
+      mirror_skill_dir "$skill_dir" "$PROJECT_ROOT/.agents/skills/$skill_name"
     fi
   done
 fi

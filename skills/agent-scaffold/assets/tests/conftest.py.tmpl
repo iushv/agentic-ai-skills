@@ -1,0 +1,125 @@
+"""Test fixtures for ${agent_name}.
+
+The fake client below is the whole reason the agent takes an injected client:
+the loop can be driven through every branch — tool use, budget exhaustion,
+provider failure, degradation — without a network call or an API key.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+
+from models import ToolResult
+from tools import BaseTool, ToolInput, ToolRegistry
+
+
+# --- fake Anthropic responses -------------------------------------------
+
+
+class FakeUsage:
+    def __init__(self, input_tokens: int = 100, output_tokens: int = 50) -> None:
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+        self.cache_read_input_tokens = 0
+
+
+class FakeTextBlock:
+    type = "text"
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+
+class FakeToolUseBlock:
+    type = "tool_use"
+
+    def __init__(self, name: str, args: dict[str, Any], block_id: str = "toolu_1") -> None:
+        self.name = name
+        self.input = args
+        self.id = block_id
+
+
+class FakeResponse:
+    def __init__(self, content: list[Any], stop_reason: str, usage: FakeUsage | None = None) -> None:
+        self.content = content
+        self.stop_reason = stop_reason
+        self.usage = usage or FakeUsage()
+
+
+def text_response(text: str, **usage: int) -> FakeResponse:
+    return FakeResponse([FakeTextBlock(text)], "end_turn", FakeUsage(**usage))
+
+
+def tool_response(name: str, args: dict[str, Any], block_id: str = "toolu_1") -> FakeResponse:
+    return FakeResponse([FakeToolUseBlock(name, args, block_id)], "tool_use")
+
+
+# --- fake client ---------------------------------------------------------
+
+
+class FakeMessages:
+    def __init__(self, responses: list[Any], fail_models: dict[str, Exception] | None = None) -> None:
+        self._responses = list(responses)
+        self._fail_models = fail_models or {}
+        self.calls: list[dict[str, Any]] = []
+
+    async def create(self, **kwargs: Any) -> FakeResponse:
+        self.calls.append(kwargs)
+        model = kwargs.get("model", "")
+        if model in self._fail_models:
+            raise self._fail_models[model]
+        if self._responses:
+            nxt = self._responses.pop(0)
+            if isinstance(nxt, Exception):
+                raise nxt
+            return nxt
+        # Exhausted: answer plainly so degradation paths terminate.
+        return text_response("done")
+
+
+class FakeClient:
+    """Stands in for anthropic.AsyncAnthropic."""
+
+    def __init__(self, responses: list[Any] | None = None, fail_models: dict[str, Exception] | None = None) -> None:
+        self.messages = FakeMessages(responses or [], fail_models)
+
+
+class TransientError(Exception):
+    """An error the retry policy should treat as retryable."""
+
+    def __init__(self, status_code: int = 529) -> None:
+        super().__init__(f"overloaded ({status_code})")
+        self.status_code = status_code
+
+
+# --- fake tool -----------------------------------------------------------
+
+
+class EchoInput(ToolInput):
+    value: str
+
+
+class EchoTool(BaseTool):
+    name = "echo"
+    description = "Echo a value back. Use this only in tests."
+    Input = EchoInput
+
+    def __init__(self, result: ToolResult | None = None) -> None:
+        self._result = result
+        self.invocations: list[EchoInput] = []
+
+    async def execute(self, args: EchoInput) -> ToolResult:
+        self.invocations.append(args)
+        return self._result or ToolResult(success=True, data={"echoed": args.value})
+
+
+@pytest.fixture
+def echo_tool() -> EchoTool:
+    return EchoTool()
+
+
+@pytest.fixture
+def registry(echo_tool: EchoTool) -> ToolRegistry:
+    return ToolRegistry([echo_tool])

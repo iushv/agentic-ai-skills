@@ -27,6 +27,52 @@ jobs:
       - name: Run validation suite
         run: bash validate.sh
 
+  scaffold:
+    name: Generated agent compiles and passes its own tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Generate an agent from the templates
+        run: |
+          python skills/agent-scaffold/scripts/scaffold.py \
+            --name demo_agent \
+            --out /tmp/demo_agent \
+            --tools run_sql,create_chart \
+            --description "answers business questions over the analytics warehouse"
+
+      - name: Check the expected tree was produced
+        run: |
+          for f in main.py agent.py config.py models.py reliability.py tracing.py \
+                   pyproject.toml tools/__init__.py tools/run_sql.py \
+                   tools/create_chart.py guardrails/input.py guardrails/output.py \
+                   guardrails/tool_guards.py tests/conftest.py tests/test_agent.py \
+                   tests/evals/golden.yaml; do
+            test -f "/tmp/demo_agent/$f" || { echo "missing: $f"; exit 1; }
+          done
+          echo "all expected files present"
+
+      - name: Byte-compile every generated file
+        run: python -m compileall -q /tmp/demo_agent
+
+      - name: Reject unresolved template placeholders
+        run: |
+          if grep -rEn '\$\{[a-z_]+\}' /tmp/demo_agent --include='*.py' \
+               --include='*.toml' --include='*.md' --include='*.yaml'; then
+            echo "unresolved template placeholders found"
+            exit 1
+          fi
+          echo "no unresolved placeholders"
+
+      - name: Run the generated test suite
+        run: |
+          python -m pip install --quiet pydantic pytest pytest-asyncio
+          cd /tmp/demo_agent && python -m pytest
+
   manifests:
     name: Validate plugin manifests
     runs-on: ubuntu-latest

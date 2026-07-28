@@ -1,0 +1,115 @@
+"""Tool contract tests for ${agent_name}.
+
+These cover the registry and the BaseTool contract. Each concrete tool should
+add its own file with cases for valid input, invalid input, and its edge cases.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from models import ToolResult
+from tools import MAX_TOOLS_PER_AGENT, BaseTool, ToolInput, ToolRegistry
+
+from conftest import EchoInput, EchoTool
+
+
+def _make_tool(name: str) -> BaseTool:
+    return type(
+        f"Tool_{name}",
+        (EchoTool,),
+        {"name": name, "description": f"Tool {name}", "Input": EchoInput},
+    )()
+
+
+# --- registry ------------------------------------------------------------
+
+
+def test_registry_rejects_empty() -> None:
+    with pytest.raises(ValueError):
+        ToolRegistry([])
+
+
+def test_registry_enforces_tool_ceiling() -> None:
+    tools = [_make_tool(f"t{i}") for i in range(MAX_TOOLS_PER_AGENT + 1)]
+    with pytest.raises(ValueError, match="exceeds"):
+        ToolRegistry(tools)
+
+
+def test_registry_accepts_the_ceiling_exactly() -> None:
+    tools = [_make_tool(f"t{i}") for i in range(MAX_TOOLS_PER_AGENT)]
+    assert len(ToolRegistry(tools)) == MAX_TOOLS_PER_AGENT
+
+
+def test_registry_rejects_duplicate_names() -> None:
+    with pytest.raises(ValueError, match="duplicate"):
+        ToolRegistry([_make_tool("same"), _make_tool("same")])
+
+
+async def test_unknown_tool_returns_error_not_exception(registry: ToolRegistry) -> None:
+    result = await registry.invoke("nope", {})
+    assert result.success is False
+    assert "unknown tool" in (result.error or "")
+
+
+# --- BaseTool contract ---------------------------------------------------
+
+
+async def test_valid_arguments_execute(echo_tool: EchoTool, registry: ToolRegistry) -> None:
+    result = await registry.invoke("echo", {"value": "hello"})
+    assert result.success is True
+    assert result.data == {"echoed": "hello"}
+    assert echo_tool.invocations[0].value == "hello"
+
+
+async def test_invalid_arguments_become_a_tool_error(registry: ToolRegistry) -> None:
+    result = await registry.invoke("echo", {"wrong_field": 1})
+    assert result.success is False
+    assert "invalid arguments" in (result.error or "")
+
+
+async def test_extra_fields_are_forbidden(registry: ToolRegistry) -> None:
+    result = await registry.invoke("echo", {"value": "hi", "sneaky": True})
+    assert result.success is False
+
+
+async def test_tool_exceptions_are_captured(registry: ToolRegistry) -> None:
+    class Boom(EchoTool):
+        name = "boom"
+        async def execute(self, args: EchoInput) -> ToolResult:
+            raise RuntimeError("kaboom")
+
+    reg = ToolRegistry([Boom()])
+    result = await reg.invoke("boom", {"value": "x"})
+    assert result.success is False
+    assert "kaboom" in (result.error or "")
+
+
+# --- schema --------------------------------------------------------------
+
+
+def test_schema_is_strict_and_closed(echo_tool: EchoTool) -> None:
+    schema = echo_tool.schema()
+    assert schema["strict"] is True
+    assert schema["input_schema"]["additionalProperties"] is False
+    assert schema["name"] == "echo"
+    assert schema["description"]
+
+
+def test_registry_exposes_every_schema(registry: ToolRegistry) -> None:
+    assert [s["name"] for s in registry.schemas()] == ["echo"]
+
+
+# --- truncation ----------------------------------------------------------
+
+
+def test_large_output_is_truncated() -> None:
+    result = ToolResult(success=True, data="x" * 50_000)
+    trimmed = result.truncated(10_000)
+    assert len(str(trimmed.data)) <= 10_000
+    assert trimmed.metadata["truncated"] is True
+
+
+def test_small_output_is_untouched() -> None:
+    result = ToolResult(success=True, data="small")
+    assert result.truncated(10_000) is result

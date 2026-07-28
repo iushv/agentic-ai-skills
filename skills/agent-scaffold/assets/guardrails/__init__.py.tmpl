@@ -1,0 +1,39 @@
+"""Guardrails for ${agent_name}.
+
+Layers 1, 2 and 4 live in `input`; layer 5 in `tool_guards`; layer 6 in
+`output`. Layer 3 (ML classification) is an integration point, not a stub.
+"""
+
+from guardrails.input import (
+    AgentInput,
+    GuardrailBlocked,
+    check_injection,
+    semantic_flags,
+    validate_input,
+    wrap_untrusted,
+)
+from guardrails.output import OutputReport, scrub_pii, validate_output
+from guardrails.tool_guards import (
+    SANDBOX_SPEC,
+    ToolBlocked,
+    assert_sandboxed,
+    validate_path,
+    validate_sql,
+)
+
+__all__ = [
+    "AgentInput",
+    "GuardrailBlocked",
+    "OutputReport",
+    "SANDBOX_SPEC",
+    "ToolBlocked",
+    "assert_sandboxed",
+    "check_injection",
+    "scrub_pii",
+    "semantic_flags",
+    "validate_input",
+    "validate_output",
+    "validate_path",
+    "validate_sql",
+    "wrap_untrusted",
+]

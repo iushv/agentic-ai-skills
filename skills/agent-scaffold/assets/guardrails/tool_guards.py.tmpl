@@ -1,0 +1,87 @@
+"""Per-tool guardrails for ${agent_name} (defence layer 5).
+
+Tool arguments are model output, which means they are untrusted input. Validate
+them here, in one place, rather than trusting each tool to police itself.
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+MUTATING_SQL = re.compile(
+    r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|GRANT|REVOKE|MERGE|"
+    r"REPLACE|ATTACH|PRAGMA|VACUUM|COPY)\b",
+    re.IGNORECASE,
+)
+SQL_COMMENT = re.compile(r"(--|/\*|\*/|#)")
+STATEMENT_SPLIT = re.compile(r";\s*\S")
+
+
+class ToolBlocked(PermissionError):
+    """Raised when a tool call is rejected before execution."""
+
+
+def validate_sql(query: str) -> str:
+    """Allow a single read-only statement. Everything else is rejected.
+
+    Comments are rejected outright rather than stripped. Stripping would leave
+    the validator reasoning about different text than the database executes,
+    and `SELECT 1 -- ; DROP TABLE x` is the standard shape of an obfuscation
+    attempt. Agent-issued SQL has no legitimate need for comments, so failing
+    closed here costs nothing.
+    """
+    stripped = query.strip().rstrip(";").strip()
+    if not stripped:
+        raise ToolBlocked("empty query")
+    if SQL_COMMENT.search(stripped):
+        raise ToolBlocked("comments are not allowed in tool-issued SQL")
+    if STATEMENT_SPLIT.search(stripped):
+        raise ToolBlocked("multiple statements are not allowed")
+    if not stripped.upper().startswith(("SELECT", "WITH")):
+        raise ToolBlocked("query must begin with SELECT or WITH")
+    if match := MUTATING_SQL.search(stripped):
+        raise ToolBlocked(f"mutating keyword blocked: {match.group(0).upper()}")
+    return stripped
+
+
+def validate_path(candidate: str, root: Path) -> Path:
+    """Confine a model-supplied path to `root`.
+
+    Resolves symlinks and `..` before comparing, so traversal cannot escape by
+    any spelling.
+    """
+    root = root.resolve()
+    target = (root / candidate).resolve()
+    if not target.is_relative_to(root):
+        raise ToolBlocked(f"path escapes the allowed root: {candidate}")
+    return target
+
+
+# Sandbox settings for any tool that executes model-supplied code. These are
+# the defaults the runtime should enforce; they are deliberately restrictive.
+SANDBOX_SPEC = {
+    "network": "none",
+    "user": "nobody",
+    "read_only_root": True,
+    "memory_mb": 512,
+    "cpu_seconds": 10,
+    "wall_clock_seconds": 30,
+    "pids_limit": 64,
+}
+
+
+def assert_sandboxed(spec: dict[str, object]) -> None:
+    """Fail loudly if a code-execution sandbox is misconfigured."""
+    problems: list[str] = []
+    if spec.get("network") != "none":
+        problems.append("network must be disabled")
+    if spec.get("user") in (None, "root", 0):
+        problems.append("must not run as root")
+    if not spec.get("read_only_root"):
+        problems.append("root filesystem must be read-only")
+    for limit in ("memory_mb", "cpu_seconds", "wall_clock_seconds"):
+        if not spec.get(limit):
+            problems.append(f"{limit} must be set")
+    if problems:
+        raise ToolBlocked("unsafe sandbox: " + "; ".join(problems))

@@ -1,0 +1,59 @@
+"""Entrypoint for ${agent_name}.
+
+    python main.py "your question here"
+
+Wires the tools, guardrails, and budgets together and prints the answer plus a
+one-line accounting of what the run cost.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import sys
+
+from agent import Agent
+from config import AgentConfig
+from tools import ToolRegistry
+${tool_imports}
+
+SYSTEM_PROMPT = """\
+You are ${agent_name}, ${description}
+
+Use the tools available to you when the answer depends on information you do not
+already have. Prefer one well-formed tool call over several speculative ones.
+When you have enough information to answer, answer — do not keep exploring.
+
+Ground every factual claim in a tool result. If the tools cannot answer the
+question, say so plainly rather than guessing.
+"""
+
+
+def build_agent() -> Agent:
+    registry = ToolRegistry([${tool_instances}])
+    return Agent(
+        tools=registry,
+        system_prompt=SYSTEM_PROMPT,
+        config=AgentConfig(),
+    )
+
+
+async def main(query: str) -> int:
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    run = await build_agent().run(query)
+
+    print(run.answer or "(no answer)")
+    print(
+        f"\n[{run.status}] {run.iterations} model calls, {run.tool_calls} tool calls, "
+        f"{run.usage.input_tokens + run.usage.output_tokens} tokens, "
+        f"{run.usage.cost_usd:.4f} USD",
+        file=sys.stderr,
+    )
+    return 0 if run.status in ("completed", "degraded") else 1
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print(__doc__, file=sys.stderr)
+        raise SystemExit(2)
+    raise SystemExit(asyncio.run(main(" ".join(sys.argv[1:]))))

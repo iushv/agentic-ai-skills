@@ -10,7 +10,7 @@ ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ERRORS=0
 WARNINGS=0
 CHECK_NUM=0
-TOTAL_CHECKS=9
+TOTAL_CHECKS=10
 
 # --- Parse CLI flags ---
 TOOLS="all"
@@ -131,40 +131,31 @@ fi
 # --- Check 6: Skill mirror parity (byte-identical cmp) ---
 CHECK_NUM=$((CHECK_NUM + 1))
 echo "[$CHECK_NUM/$TOTAL_CHECKS] Skill mirror parity"
-MIRROR_OK=1
-while IFS= read -r skill_file; do
-  SKILL_NAME="$(basename "$(dirname "$skill_file")")"
+# Compares the whole skill directory, not just SKILL.md: skills bundle
+# assets/, scripts/, and evals/ that the mirrors need too.
+MIRROR_EXCLUDES=(-x '__pycache__' -x '*.pyc' -x '.DS_Store')
+while IFS= read -r skill_dir; do
+  SKILL_NAME="$(basename "$skill_dir")"
 
-  if tool_enabled "claude"; then
-    CLAUDE_MIRROR="$PROJECT_ROOT/.claude/skills/$SKILL_NAME/SKILL.md"
-    if [ -f "$CLAUDE_MIRROR" ]; then
-      if cmp -s "$skill_file" "$CLAUDE_MIRROR"; then
-        pass "$SKILL_NAME: canonical == .claude/skills/ mirror"
-      else
-        fail "$SKILL_NAME: .claude/skills/ mirror is NOT byte-identical"
-        MIRROR_OK=0
-      fi
-    else
-      fail "$SKILL_NAME: .claude/skills/ mirror missing"
-      MIRROR_OK=0
-    fi
-  fi
+  for pair in "claude:.claude/skills" "codex:.agents/skills"; do
+    TOOL="${pair%%:*}"
+    BASE="${pair#*:}"
+    tool_enabled "$TOOL" || continue
 
-  if tool_enabled "codex"; then
-    CODEX_MIRROR="$PROJECT_ROOT/.agents/skills/$SKILL_NAME/SKILL.md"
-    if [ -f "$CODEX_MIRROR" ]; then
-      if cmp -s "$skill_file" "$CODEX_MIRROR"; then
-        pass "$SKILL_NAME: canonical == .agents/skills/ mirror"
-      else
-        fail "$SKILL_NAME: .agents/skills/ mirror is NOT byte-identical"
-        MIRROR_OK=0
-      fi
-    else
-      fail "$SKILL_NAME: .agents/skills/ mirror missing"
-      MIRROR_OK=0
+    MIRROR="$PROJECT_ROOT/$BASE/$SKILL_NAME"
+    if [ ! -d "$MIRROR" ]; then
+      fail "$SKILL_NAME: $BASE/ mirror missing"
+      continue
     fi
-  fi
-done < <(find "$ROOT_DIR/skills" -name "SKILL.md" -type f 2>/dev/null)
+    if diff -r "${MIRROR_EXCLUDES[@]}" "$skill_dir" "$MIRROR" >/dev/null 2>&1; then
+      FILE_COUNT="$(find "$skill_dir" -type f ! -name '*.pyc' | wc -l | tr -d ' ')"
+      pass "$SKILL_NAME: canonical == $BASE/ mirror ($FILE_COUNT files)"
+    else
+      fail "$SKILL_NAME: $BASE/ mirror differs from canonical"
+      diff -r "${MIRROR_EXCLUDES[@]}" "$skill_dir" "$MIRROR" 2>&1 | head -5
+    fi
+  done
+done < <(find "$ROOT_DIR/skills" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
 
 # --- Check 7: Mirror frontmatter integrity ---
 CHECK_NUM=$((CHECK_NUM + 1))
@@ -239,6 +230,25 @@ if [ -z "$CLAUDE_REFS" ]; then
   pass "sync-rules.sh has no CLAUDE.md references"
 else
   fail "sync-rules.sh references CLAUDE.md: $CLAUDE_REFS"
+fi
+
+# --- Check 10: bundled Python scripts parse ---
+CHECK_NUM=$((CHECK_NUM + 1))
+echo "[$CHECK_NUM/$TOTAL_CHECKS] Bundled script syntax"
+PY_FOUND=0
+while IFS= read -r py_file; do
+  PY_FOUND=1
+  # ast.parse rather than py_compile: no __pycache__ artefacts, which would
+  # otherwise break mirror parity on the next run.
+  if python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' "$py_file" 2>/dev/null; then
+    pass "$(basename "$(dirname "$py_file")")/$(basename "$py_file") parses"
+  else
+    fail "$(basename "$py_file") has a syntax error"
+    python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' "$py_file" 2>&1 | tail -3
+  fi
+done < <(find "$ROOT_DIR/skills" -name '*.py' -type f 2>/dev/null)
+if [ "$PY_FOUND" -eq 0 ]; then
+  pass "no bundled Python scripts to check"
 fi
 
 # --- Summary ---

@@ -1,0 +1,105 @@
+"""Tool registry for ${agent_name}.
+
+Tools are the highest-leverage part of an agent, so the contract here is strict:
+a constrained Pydantic input model, a rich description, and a typed ToolResult
+out. Nothing returns a bare string.
+"""
+
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from typing import Any, ClassVar
+
+from pydantic import BaseModel, ConfigDict, ValidationError
+
+from models import ToolResult
+
+# From the architecture rules: past this many tools, selection accuracy drops.
+# Use tool search or split the agent rather than raising the ceiling.
+MAX_TOOLS_PER_AGENT = 7
+
+
+class ToolInput(BaseModel):
+    """Base for tool argument models.
+
+    `extra="forbid"` emits `additionalProperties: false` in the JSON schema,
+    which is required for strict tool use.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class BaseTool(ABC):
+    """One capability, described well enough that the model knows when to reach
+    for it."""
+
+    name: ClassVar[str]
+    description: ClassVar[str]
+    Input: ClassVar[type[ToolInput]]
+    idempotent: ClassVar[bool] = True
+
+    @abstractmethod
+    async def execute(self, args: Any) -> ToolResult:
+        """Do the work. `args` is already validated against `Input`."""
+
+    async def __call__(self, raw: dict[str, Any]) -> ToolResult:
+        """Validate then execute. Validation failures come back as tool errors,
+        not exceptions, so the model can correct itself and retry."""
+        try:
+            parsed = self.Input.model_validate(raw)
+        except ValidationError as exc:
+            return ToolResult(
+                success=False,
+                error=f"invalid arguments for {self.name}: {exc.errors(include_url=False)}",
+            )
+        try:
+            return await self.execute(parsed)
+        except Exception as exc:  # noqa: BLE001 - surfaced to the model as an error
+            return ToolResult(success=False, error=f"{type(exc).__name__}: {exc}")
+
+    def schema(self) -> dict[str, Any]:
+        """The Anthropic tool definition for this tool."""
+        return {
+            "name": self.name,
+            "description": self.description,
+            "input_schema": self.Input.model_json_schema(),
+            "strict": True,
+        }
+
+
+class ToolRegistry:
+    """Holds the agent's tools and enforces the count limit."""
+
+    def __init__(self, tools: list[BaseTool]) -> None:
+        if not tools:
+            raise ValueError("an agent needs at least one tool")
+        if len(tools) > MAX_TOOLS_PER_AGENT:
+            raise ValueError(
+                f"{len(tools)} tools exceeds the {MAX_TOOLS_PER_AGENT}-tool limit. "
+                "Split the agent or enable tool search instead of raising this."
+            )
+        names = [t.name for t in tools]
+        if len(set(names)) != len(names):
+            raise ValueError(f"duplicate tool names: {names}")
+        self._tools = {t.name: t for t in tools}
+
+    def __len__(self) -> int:
+        return len(self._tools)
+
+    def __contains__(self, name: object) -> bool:
+        return name in self._tools
+
+    def schemas(self) -> list[dict[str, Any]]:
+        return [t.schema() for t in self._tools.values()]
+
+    async def invoke(self, name: str, args: dict[str, Any]) -> ToolResult:
+        tool = self._tools.get(name)
+        if tool is None:
+            return ToolResult(
+                success=False,
+                error=f"unknown tool {name!r}; available: {sorted(self._tools)}",
+            )
+        return await tool(args)
+
+
+__all__ = ["BaseTool", "ToolInput", "ToolRegistry", "MAX_TOOLS_PER_AGENT"]

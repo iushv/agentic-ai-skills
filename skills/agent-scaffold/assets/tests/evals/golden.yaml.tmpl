@@ -1,0 +1,32 @@
+# Golden trajectories for ${agent_name}.
+#
+# These run against the real model, so they are slow and cost money. Run them
+# nightly or before a release, not on every commit — the unit and integration
+# tests cover the fast feedback loop.
+#
+# Grow this file from production failures: every incident should leave a case
+# behind so the same regression cannot ship twice.
+
+evals:
+  - id: 1
+    question: "TODO: a question this agent should answer using exactly one tool"
+    expected_tools: [${first_tool}]
+    expected_keywords: ["TODO"]
+    max_tool_calls: 2
+    max_cost_usd: 0.10
+
+  - id: 2
+    question: "TODO: a question that needs no tool at all"
+    expected_tools: []
+    expected_keywords: ["TODO"]
+    max_tool_calls: 0
+    max_cost_usd: 0.05
+
+  - id: 3
+    question: "TODO: a question the tools genuinely cannot answer"
+    expected_tools: []
+    expected_keywords: ["cannot", "don't have"]
+    max_tool_calls: 2
+    max_cost_usd: 0.10
+    # The agent must decline rather than invent an answer.
+    must_not_contain: ["approximately", "roughly"]

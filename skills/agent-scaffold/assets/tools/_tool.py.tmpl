@@ -1,0 +1,55 @@
+"""The ${tool_name} tool.
+
+TODO: replace the body of `execute` with the real implementation. Everything
+around it — the constrained schema, the rich description, the typed result — is
+already shaped the way the design rules require. Keep it that way.
+"""
+
+from __future__ import annotations
+
+from pydantic import Field
+
+from models import ToolResult
+from tools import BaseTool, ToolInput
+
+
+class ${tool_class}Input(ToolInput):
+    """Arguments for ${tool_name}."""
+
+    # Every parameter needs a description and at least one constraint.
+    # Unconstrained `str` and `dict` parameters are how agents go wrong.
+    query: str = Field(
+        description="What to look up. State it as a complete question.",
+        min_length=1,
+        max_length=2000,
+    )
+    limit: int = Field(
+        default=20,
+        description="Maximum number of records to return.",
+        ge=1,
+        le=100,
+    )
+
+
+class ${tool_class}(BaseTool):
+    name = "${tool_name}"
+    description = (
+        "TODO: one line on what this returns.\n\n"
+        "Use this tool when:\n"
+        "- TODO: the specific condition that should trigger it\n\n"
+        "Do NOT use this tool for:\n"
+        "- TODO: the neighbouring case that belongs to a different tool\n\n"
+        "Returns: a structured record set, newest first.\n"
+        "Limits: at most 100 records per call."
+    )
+    Input = ${tool_class}Input
+    idempotent = True
+
+    async def execute(self, args: ${tool_class}Input) -> ToolResult:
+        # TODO: real work goes here. Use httpx for HTTP; never `requests` in
+        # async code. Return structured data, never a formatted string.
+        return ToolResult(
+            success=True,
+            data={"query": args.query, "limit": args.limit, "records": []},
+            metadata={"tool": self.name, "stub": True},
+        )

@@ -1,0 +1,58 @@
+# ${agent_name}
+
+${description}
+
+A level-${level} agent scaffolded by
+[agentic-ai-skills](https://github.com/iushv/agentic-ai-skills).
+
+## Run it
+
+```bash
+pip install -e ".[dev]"
+export ANTHROPIC_API_KEY=...
+python main.py "your question here"
+```
+
+## Test it
+
+The test suite drives the real agent loop with a fake model, so it needs no API
+key and makes no network calls:
+
+```bash
+pytest
+```
+
+## What is already wired up
+
+| Concern | Where | Notes |
+|---|---|---|
+| Budgets | `config.py` | Checked before every model call, not after |
+| Agent loop | `agent.py` | ReAct with tracing, degradation, and parallel tool results |
+| Retry and fallback | `reliability.py` | Backoff with jitter, per-provider circuit breaker |
+| Input guardrails | `guardrails/input.py` | Schema, injection patterns, semantic intent |
+| Tool guardrails | `guardrails/tool_guards.py` | Read-only SQL, path confinement, sandbox spec |
+| Output guardrails | `guardrails/output.py` | PII scrubbing, prompt-leak and grounding checks |
+| Tracing | `tracing.py` | One structured event per step, JSON to stdlib logging |
+
+## What you still have to do
+
+1. Implement each tool's `execute` in `tools/`. They return stubs right now.
+2. Replace the TODOs in each tool's `description` — the model picks tools from
+   those descriptions, so vague ones cause wrong-tool bugs.
+3. Fill in `tests/evals/golden.yaml` with real questions and expected tools.
+4. Point `tracing.py` at Langfuse or LangSmith instead of the logging sink.
+5. Set alerts on error rate, cost per hour, P95 latency, and provider outages.
+
+## Limits
+
+Defaults live in `config.py` and are deliberately conservative:
+
+| Limit | Default |
+|---|---|
+| `max_iterations` | 10 |
+| `max_tool_calls` | 25 |
+| `max_tokens` | 100,000 |
+| `max_cost_usd` | 0.50 |
+| `timeout_seconds` | 120 |
+
+Raise them deliberately, one at a time, with a trace showing why.
