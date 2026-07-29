@@ -6,6 +6,7 @@
       "prompt": "Set up guardrails for a support agent that can query our customer database. It sees names, emails, and phone numbers.",
       "expected_output": "A six-layer pipeline with SELECT-only SQL enforcement and PII scrubbing on output, wired into the request path, with tests per layer.",
       "expectations": [
+        "The generator is run with --sql rather than guardrail code being pasted in by hand",
         "The generated pipeline covers input schema validation, content filtering, semantic analysis, tool guardrails, and output guardrails",
         "SQL validation rejects INSERT, UPDATE, DELETE, DROP, ALTER, and TRUNCATE",
         "Output scrubbing covers email and phone number patterns",
@@ -30,11 +31,12 @@
       "prompt": "Our agent runs Python that users supply. What guardrails do I need?",
       "expected_output": "A sandbox specification with network disabled, read-only filesystem, resource limits, and a non-root user, plus tests proving each restriction holds.",
       "expectations": [
-        "The sandbox configuration sets network access to none",
-        "The sandbox runs as a non-root user",
-        "Memory, CPU, or wall-clock resource limits are specified",
-        "The filesystem is read-only or restricted to a scratch directory",
-        "A test is included that asserts network access fails from inside the sandbox"
+        "The generator is run with --code-exec rather than guardrail code being written by hand",
+        "The generated sandbox specification sets network access to none",
+        "The specification runs as a non-root user with capabilities dropped",
+        "Memory, CPU, and wall-clock limits are all specified",
+        "A test asserts that a specification with networking enabled is rejected",
+        "The response is clear that the generated module asserts the specification is safe rather than executing code to prove it, and that the runtime must enforce it"
       ]
     }
   ]

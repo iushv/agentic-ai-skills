@@ -113,3 +113,32 @@ def test_large_output_is_truncated() -> None:
 def test_small_output_is_untouched() -> None:
     result = ToolResult(success=True, data="small")
     assert result.truncated(10_000) is result
+
+
+# --- the tools this project actually generated ---------------------------
+
+${tool_imports}
+
+
+def test_generated_tools_build_their_schemas() -> None:
+    """Every generated tool must construct and produce a valid schema.
+
+    This is not ceremony. Pydantic v2 compiles field patterns with the Rust
+    regex engine at class-creation time, so a Python-only escape sequence is a
+    startup crash rather than a test failure — and nothing else in this suite
+    imports the generated tool modules.
+    """
+    tools = [${tool_instances}]
+    assert tools, "no tools were generated"
+
+    for tool in tools:
+        schema = tool.schema()
+        assert schema["name"] == tool.name
+        assert schema["description"].strip(), f"{tool.name} has an empty description"
+        assert schema["input_schema"]["additionalProperties"] is False
+        assert schema["strict"] is True
+
+
+def test_generated_tools_have_unique_names() -> None:
+    names = [t.name for t in [${tool_instances}]]
+    assert len(set(names)) == len(names), f"duplicate tool names: {names}"

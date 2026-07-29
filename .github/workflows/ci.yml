@@ -28,8 +28,17 @@ jobs:
         run: bash validate.sh
 
   scaffold:
-    name: Generated agent compiles and passes its own tests
+    name: Generated agent passes its own tests
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # --level must change the emitted loop, not just the docstrings.
+          - level: 2
+            loop: router
+          - level: 3
+            loop: react
     steps:
       - uses: actions/checkout@v4
 
@@ -37,24 +46,58 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Generate an agent from the templates
+      - name: Levels 0 and 1 are refused, and write nothing
+        run: |
+          for lv in 0 1; do
+            if python skills/agent-scaffold/scripts/scaffold.py \
+                 --name x --out /tmp/refused --tools run_sql --level "$lv" 2>/dev/null; then
+              echo "level $lv should have been refused"; exit 1
+            fi
+          done
+          test ! -e /tmp/refused || { echo "a refused run still wrote files"; exit 1; }
+          echo "levels 0 and 1 refused, nothing written"
+
+      - name: Generate an agent (level ${{ matrix.level }})
+        env:
+          LEVEL: ${{ matrix.level }}
         run: |
           python skills/agent-scaffold/scripts/scaffold.py \
             --name demo_agent \
             --out /tmp/demo_agent \
+            --level "$LEVEL" \
             --tools run_sql,create_chart \
             --description "answers business questions over the analytics warehouse"
 
       - name: Check the expected tree was produced
         run: |
-          for f in main.py agent.py config.py models.py reliability.py tracing.py \
-                   pyproject.toml tools/__init__.py tools/run_sql.py \
+          for f in main.py agent.py llm.py config.py models.py reliability.py \
+                   tracing.py pyproject.toml tools/__init__.py tools/run_sql.py \
                    tools/create_chart.py guardrails/input.py guardrails/output.py \
                    guardrails/tool_guards.py tests/conftest.py tests/test_agent.py \
                    tests/evals/golden.yaml; do
             test -f "/tmp/demo_agent/$f" || { echo "missing: $f"; exit 1; }
           done
           echo "all expected files present"
+
+      - name: Assert the loop shape matches the level
+        env:
+          LOOP: ${{ matrix.loop }}
+        run: |
+          loops=$(grep -c 'while True' /tmp/demo_agent/agent.py || true)
+          if [ "$LOOP" = "router" ]; then
+            test "$loops" -eq 0 || { echo "router must have no loop, found $loops"; exit 1; }
+          else
+            test "$loops" -eq 1 || { echo "react must have one loop, found $loops"; exit 1; }
+          fi
+          echo "$LOOP shape confirmed ($loops loops)"
+
+      - name: Assert the SQL tool is generated in its SQL shape
+        run: |
+          grep -q 'validate_sql' /tmp/demo_agent/tools/run_sql.py \
+            || { echo "run_sql is not wired to the SQL guard"; exit 1; }
+          grep -q 'SELECT|WITH' /tmp/demo_agent/tools/run_sql.py \
+            || { echo "run_sql has no read-only pattern constraint"; exit 1; }
+          echo "run_sql generated in SQL shape"
 
       - name: Byte-compile every generated file
         run: python -m compileall -q /tmp/demo_agent

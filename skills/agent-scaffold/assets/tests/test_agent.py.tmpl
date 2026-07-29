@@ -7,8 +7,9 @@ exhaustion, provider failure, and the guardrails at both ends.
 
 from __future__ import annotations
 
-from agent import Agent, estimate_cost
+from agent import Agent
 from config import AgentConfig
+from llm import estimate_cost
 from tools import ToolRegistry
 
 from conftest import EchoTool, FakeClient, TransientError, text_response, tool_response

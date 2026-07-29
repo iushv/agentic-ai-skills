@@ -45,33 +45,49 @@ passes offline with no key. If it does not pass, stop and fix that first.
 | `--out` | required | output directory |
 | `--tools` | required | comma-separated `verb_noun` names, 1-7 of them |
 | `--description` | generic | one line, used in the system prompt and README |
-| `--level` | `3` | architecture level 0-5 |
+| `--level` | `3` | `2` for a router, `3`+ for a ReAct loop. `0` and `1` are refused |
 | `--model` | `claude-sonnet-5` | primary model |
 | `--fallback-model` | `claude-haiku-4-5` | second model in the fallback chain |
 | `--dry-run` | off | list the files without writing them |
 | `--force` | off | overwrite a non-empty directory |
 
 The generator refuses more than 7 tools and warns when a tool name is not
-`verb_noun`, when level 4+ is requested without a permission split, and when
-tools are requested at a level that has no dynamic tool selection.
+`verb_noun`, when a router is given only one handler, and when level 4+ is
+requested.
 
-## Choosing the level before you generate
+## `--level` changes the code, not just the docstring
 
-Pass `--level` deliberately. Auto-defaulting to 3 is right for most agents but
-wrong for the two ends:
+| Level | What you get |
+|---|---|
+| 0 | **Refused.** A single model call is not an agent. Write the call directly. |
+| 1 | **Refused.** A prompt chain is a fixed sequence you write out, not a loop. |
+| 2 | A **router**: one forced tool choice, one handler, two model calls, no loop. |
+| 3 | A **ReAct loop** with dynamic tool selection. The default. |
+| 4-5 | The level-3 scaffold, plus a note that multi-agent means running the generator once per agent. |
 
-- No tools needed, single turn → **L0**. Do not scaffold an agent; make one call.
-- Fixed, predictable sequence → **L1/L2**. A chain or router, not a loop.
-- Dynamic tool selection → **L3**. The default.
-- Genuinely different permissions or models per step → **L4**. Needs justification.
-- Open-ended exploration → **L5**. Rare, and expensive to get right.
+Both loop shapes expose the same `Agent` class and `run()` signature, so moving
+between them is a one-line change at the call site.
+
+Choose 2 over 3 when the set of task types is known in advance — a router
+cannot run away, and you can price a request before you send it. Move to 3 when
+the agent needs to chain tools, or decide what to do next based on what a tool
+returned.
+
+## Tool templates follow the tool name
+
+A tool whose name contains `sql` is generated in its SQL shape: the `query`
+parameter carries a pattern constraint, and the body routes through
+`validate_sql` and executes the returned value. Everything else gets the
+generic template with a constrained string and a TODO body. Add further shapes
+in `assets/tools/` when you find yourself writing the same schema twice.
 
 ## What gets generated
 
 ```
 {name}/
 ├── main.py              # Entrypoint: wires tools, prints answer + cost
-├── agent.py             # ReAct loop: budgets, guardrails, degradation
+├── agent.py             # The loop — ReAct or router, per --level
+├── llm.py               # Model calls: retry, fallback, pricing, tracing
 ├── config.py            # AgentConfig — every limit, checked before each call
 ├── models.py            # AgentRun, AgentStep, ToolResult, Usage
 ├── reliability.py       # Backoff with jitter, circuit breaker, fallback chain

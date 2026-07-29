@@ -31,6 +31,16 @@ adaptive thinking (`thinking={"type": "adaptive"}`) plus `output_config.effort`
 - `/agent-debug` — Diagnose failing agent via incident playbook
 - `/guardrail-setup` — Add guardrail pipeline with tests
 
+Two of these ship runnable generators rather than prose. Run the script; do not
+hand-write what it emits:
+
+- `skills/agent-scaffold/scripts/scaffold.py` — a full agent project
+- `skills/guardrail-setup/scripts/add_guardrails.py` — a guardrail package
+
+Their templates live in each skill's `assets/`. Edit those, never the generated
+output, and regenerate afterwards — CI runs both generators and their emitted
+test suites on every push.
+
 ### Conventions
 
 - Use async-first Python 3.12+.

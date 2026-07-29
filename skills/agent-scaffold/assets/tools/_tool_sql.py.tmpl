@@ -1,0 +1,79 @@
+"""The ${tool_name} tool.
+
+Generated in its SQL shape because the tool name contains "sql". The schema and
+the guard are already correct; only `execute` needs your database.
+
+Two things here are load-bearing and should survive your edits:
+
+1. The `query` field carries a pattern constraint, so the model is steered
+   toward read-only SQL before a single byte reaches the guard.
+2. `validate_sql` returns normalised SQL, and that return value is what gets
+   executed. Running the original string instead would mean the database sees
+   text the validator never approved.
+"""
+
+from __future__ import annotations
+
+from pydantic import Field
+
+from guardrails.tool_guards import ToolBlocked, validate_sql
+from models import ToolResult
+from tools import BaseTool, ToolInput
+
+
+class ${tool_class}Input(ToolInput):
+    """Arguments for ${tool_name}."""
+
+    query: str = Field(
+        description=(
+            "A single read-only SQL statement beginning with SELECT or WITH. "
+            "No comments, no semicolons, no mutations."
+        ),
+        min_length=1,
+        max_length=4000,
+        # A first line of defence in the schema itself. `validate_sql` is the
+        # real gate; this just makes the constraint visible to the model.
+        pattern=r"(?is)^\s*(SELECT|WITH)\b",
+    )
+    max_rows: int = Field(
+        default=200,
+        description="Maximum rows to return. Keep this small; results enter the context window.",
+        ge=1,
+        le=1000,
+    )
+
+
+class ${tool_class}(BaseTool):
+    name = "${tool_name}"
+    description = (
+        "Run a read-only SQL query against the analytics database and return rows.\n\n"
+        "Use this tool when:\n"
+        "- The question needs data that lives in the warehouse\n"
+        "- You know which tables and columns to query\n\n"
+        "Do NOT use this tool for:\n"
+        "- Writing, updating, or deleting anything. It will be rejected.\n"
+        "- Exploring what tables exist. Ask for the schema instead.\n\n"
+        "Returns: a list of row objects plus the row count.\n"
+        "Limits: SELECT and WITH only; at most 1000 rows per call."
+    )
+    Input = ${tool_class}Input
+    idempotent = True
+
+    async def execute(self, args: ${tool_class}Input) -> ToolResult:
+        try:
+            safe_query = validate_sql(args.query)
+        except ToolBlocked as exc:
+            # Returned as a tool error, not raised: the model can read this and
+            # correct its query on the next turn.
+            return ToolResult(success=False, error=str(exc))
+
+        # TODO: execute `safe_query` against your read replica. Use an async
+        # driver (asyncpg, aiosqlite) — never a blocking one in an async loop.
+        # Execute safe_query, NOT args.query.
+        rows: list[dict[str, object]] = []
+
+        return ToolResult(
+            success=True,
+            data={"rows": rows[: args.max_rows], "row_count": len(rows)},
+            metadata={"tool": self.name, "query": safe_query, "stub": True},
+        )

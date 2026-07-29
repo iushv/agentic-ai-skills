@@ -1,12 +1,15 @@
-"""The ${agent_name} agent loop (level 3, ReAct).
+"""The ${agent_name} agent (level 2, router).
 
-The loop is deliberately explicit rather than delegated to a framework, because
-the interesting parts are the checks *between* steps: budgets before every model
-call, guardrails around every tool call, and a defined degradation path.
+A router is not a loop. It classifies the request into exactly one handler,
+runs it, and phrases the result. Two model calls, one tool call, always — so it
+cannot run away, and its cost is predictable before you send it.
 
-Model calls go through `llm.ModelCaller`, which owns retry, fallback, pricing,
-and tracing. The client is injected so tests drive the loop with a fake and
-never touch the network.
+Use this when the set of task types is known in advance. The moment the agent
+needs to *chain* tools or decide what to do next based on a tool result, it has
+outgrown a router: regenerate at level 3.
+
+The public API matches the level-3 agent, so swapping between them is a
+one-line change at the call site.
 """
 
 from __future__ import annotations
@@ -29,9 +32,15 @@ DEGRADED_MESSAGE = (
     "answer. Please try again in a minute."
 )
 
+ROUTING_SUFFIX = """
+
+Select exactly one tool for this request. Do not explain your choice; the tool
+call is the answer. If no tool fits, choose the closest one and say so in its
+arguments."""
+
 
 class Agent:
-    """Runs one query to completion, or fails in a defined way."""
+    """Classify, dispatch once, answer. No iteration."""
 
     def __init__(
         self,
@@ -46,15 +55,8 @@ class Agent:
         self.system_prompt = system_prompt
         self.llm = ModelCaller(self.config, client)
 
-    # --- budget ----------------------------------------------------------
-
     def _check_budget(self, run: AgentRun, deadline: float) -> None:
-        """Every limit, checked before the next model call rather than after."""
         cfg = self.config
-        if run.iterations >= cfg.max_iterations:
-            raise BudgetExceeded("max_iterations", run.iterations, cfg.max_iterations)
-        if run.tool_calls >= cfg.max_tool_calls:
-            raise BudgetExceeded("max_tool_calls", run.tool_calls, cfg.max_tool_calls)
         if run.usage.cost_usd >= cfg.max_cost_usd:
             raise BudgetExceeded("max_cost_usd", run.usage.cost_usd, cfg.max_cost_usd)
         total_tokens = run.usage.input_tokens + run.usage.output_tokens
@@ -64,44 +66,6 @@ class Agent:
             raise BudgetExceeded(
                 "timeout_seconds", cfg.timeout_seconds, cfg.timeout_seconds
             )
-
-    # --- tools -----------------------------------------------------------
-
-    async def _run_tool(self, tracer: Tracer, block: Any) -> dict[str, Any]:
-        """Execute one tool_use block and shape its result for the next turn."""
-        with tracer.step(StepKind.TOOL_CALL, block.name, tool_use_id=block.id) as step:
-            result = await self.tools.invoke(block.name, dict(block.input))
-            result = result.truncated(self.config.max_tool_output_chars)
-            step.detail["success"] = result.success
-            if not result.success:
-                step.error = result.error
-        return {
-            "type": "tool_result",
-            "tool_use_id": block.id,
-            "content": str(result.data if result.success else result.error),
-            "is_error": not result.success,
-        }
-
-    # --- degradation -----------------------------------------------------
-
-    async def _degrade(
-        self, run: AgentRun, tracer: Tracer, messages: list[dict[str, Any]], reason: str
-    ) -> str:
-        """Level 3 degradation: answer directly, no tools. Level 5: say so."""
-        run.status = "degraded"
-        run.degradation_level = 3
-        tracer.event("degradation", level=3, reason=reason)
-        try:
-            response = await self.llm.call(
-                tracer, messages, self.system_prompt, label="degraded.no_tools"
-            )
-            return first_text(response) or DEGRADED_MESSAGE
-        except BaseException:  # noqa: BLE001 - degradation must never raise
-            run.degradation_level = 5
-            tracer.event("degradation", level=5, reason=reason)
-            return DEGRADED_MESSAGE
-
-    # --- entrypoint ------------------------------------------------------
 
     async def run(self, query: str, conversation_id: str = "default") -> AgentRun:
         run = AgentRun(query=query)
@@ -124,31 +88,71 @@ class Agent:
         answer: str | None = None
 
         try:
-            while True:
+            # Step 1 - route. `tool_choice: any` forces exactly one tool call,
+            # which is what makes this a router rather than a one-shot agent.
+            self._check_budget(run, deadline)
+            routed = await asyncio.wait_for(
+                self.llm.call(
+                    tracer,
+                    messages,
+                    self.system_prompt + ROUTING_SUFFIX,
+                    tools=self.tools.schemas(),
+                    tool_choice={"type": "any"},
+                    label="route",
+                ),
+                timeout=max(deadline - time.monotonic(), 0.1),
+            )
+
+            blocks = tool_use_blocks(routed)
+            if not blocks:
+                # The model answered instead of routing. Take the answer rather
+                # than forcing a retry that would cost another call.
+                answer = first_text(routed)
+                tracer.event("no_route", reason="model returned text, not a tool call")
+            else:
+                block = blocks[0]
+                with tracer.step(
+                    StepKind.TOOL_CALL, block.name, tool_use_id=block.id
+                ) as step:
+                    result = await self.tools.invoke(block.name, dict(block.input))
+                    result = result.truncated(self.config.max_tool_output_chars)
+                    step.detail["success"] = result.success
+                    if not result.success:
+                        step.error = result.error
+
+                payload = str(result.data if result.success else result.error)
+                tool_outputs.append(payload)
+                messages.append({"role": "assistant", "content": routed.content})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": block.id,
+                                "content": payload,
+                                "is_error": not result.success,
+                            }
+                        ],
+                    }
+                )
+
+                # Step 2 - phrase the result. No tools, so this cannot start a
+                # second round of tool use.
                 self._check_budget(run, deadline)
-                response = await asyncio.wait_for(
+                final = await asyncio.wait_for(
                     self.llm.call(
-                        tracer, messages, self.system_prompt, tools=self.tools.schemas()
+                        tracer, messages, self.system_prompt, label="answer"
                     ),
                     timeout=max(deadline - time.monotonic(), 0.1),
                 )
-
-                if getattr(response, "stop_reason", None) != "tool_use":
-                    answer = first_text(response)
-                    break
-
-                messages.append({"role": "assistant", "content": response.content})
-                results = await asyncio.gather(
-                    *(self._run_tool(tracer, b) for b in tool_use_blocks(response))
-                )
-                tool_outputs.extend(str(r["content"]) for r in results)
-                # All results go back in a single user turn. Splitting them
-                # teaches the model to stop making parallel calls.
-                messages.append({"role": "user", "content": list(results)})
+                answer = first_text(final)
 
         except BudgetExceeded as exc:
             tracer.event("budget_exceeded", limit=exc.limit, used=exc.used)
-            answer = await self._degrade(run, tracer, messages, f"budget:{exc.limit}")
+            run.status = "degraded"
+            run.degradation_level = 5
+            answer = DEGRADED_MESSAGE
         except (CircuitOpen, asyncio.TimeoutError) as exc:
             tracer.event("provider_failure", error=str(exc))
             run.status = "degraded"
@@ -156,7 +160,9 @@ class Agent:
             answer = DEGRADED_MESSAGE
         except BaseException as exc:  # noqa: BLE001 - never fail silently
             tracer.event("unhandled_error", error=f"{type(exc).__name__}: {exc}")
-            answer = await self._degrade(run, tracer, messages, "unhandled_error")
+            run.status = "degraded"
+            run.degradation_level = 5
+            answer = DEGRADED_MESSAGE
 
         with tracer.step(StepKind.GUARDRAIL, "output"):
             report = validate_output(

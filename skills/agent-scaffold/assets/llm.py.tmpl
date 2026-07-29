@@ -1,0 +1,135 @@
+"""Model calling for ${agent_name}.
+
+Shared by every architecture level, so the retry, fallback, pricing, and tracing
+behaviour cannot drift between loop shapes. The loops differ in *what* they ask
+for; how the request is made is the same everywhere.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Protocol
+
+from config import AgentConfig
+from models import StepKind
+from reliability import FallbackChain
+from tracing import Tracer, usage_from_response
+
+# Cost per million tokens (input, output), in USD. Update when prices change;
+# a stale table silently under-reports spend, which defeats the budget.
+PRICE_PER_MTOK: dict[str, tuple[float, float]] = {
+    "claude-fable-5": (10.0, 50.0),
+    "claude-opus-5": (5.0, 25.0),
+    "claude-sonnet-5": (3.0, 15.0),
+    "claude-haiku-4-5": (1.0, 5.0),
+}
+DEFAULT_PRICE = (5.0, 25.0)
+
+
+def estimate_cost(model: str, usage: Any) -> float:
+    """Cost in USD for one response's usage block."""
+    inp_rate, out_rate = PRICE_PER_MTOK.get(model, DEFAULT_PRICE)
+    inp = getattr(usage, "input_tokens", 0) or 0
+    out = getattr(usage, "output_tokens", 0) or 0
+    return (inp * inp_rate + out * out_rate) / 1_000_000
+
+
+def first_text(response: Any) -> str | None:
+    """The first text block of a response, ignoring thinking blocks."""
+    for block in getattr(response, "content", []) or []:
+        if getattr(block, "type", None) == "text":
+            return getattr(block, "text", None)
+    return None
+
+
+def tool_use_blocks(response: Any) -> list[Any]:
+    """Every tool_use block in a response, in order."""
+    return [
+        b for b in (getattr(response, "content", []) or [])
+        if getattr(b, "type", None) == "tool_use"
+    ]
+
+
+class MessagesClient(Protocol):
+    """The slice of the Anthropic client the agent actually uses."""
+
+    messages: Any
+
+
+class ModelCaller:
+    """Issues model requests with retry, fallback, tracing, and cost accounting."""
+
+    def __init__(self, config: AgentConfig, client: MessagesClient | None = None) -> None:
+        self.config = config
+        self._client = client
+        self.chain = FallbackChain(
+            [config.model, *config.fallback_models],
+            failure_threshold=config.circuit_failure_threshold,
+            cooldown=config.circuit_cooldown_seconds,
+        )
+
+    @property
+    def client(self) -> MessagesClient:
+        if self._client is None:
+            from anthropic import AsyncAnthropic  # imported lazily
+
+            self._client = AsyncAnthropic()
+        return self._client
+
+    def request_kwargs(
+        self,
+        model: str,
+        messages: list[dict[str, Any]],
+        system: str,
+        *,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        cfg = self.config
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "max_tokens": 8192,
+            "system": system,
+            "messages": messages,
+            # Adaptive thinking replaces fixed thinking-token budgets, which
+            # current models reject outright.
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": cfg.effort},
+        }
+        if tools:
+            kwargs["tools"] = tools
+        if tool_choice:
+            kwargs["tool_choice"] = tool_choice
+        if cfg.task_budget_tokens:
+            kwargs["output_config"]["task_budget"] = {
+                "type": "tokens",
+                "total": cfg.task_budget_tokens,
+            }
+        return kwargs
+
+    async def call(
+        self,
+        tracer: Tracer,
+        messages: list[dict[str, Any]],
+        system: str,
+        *,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: dict[str, Any] | None = None,
+        label: str = "messages.create",
+    ) -> Any:
+        with tracer.step(StepKind.LLM_CALL, label) as step:
+            model, response = await self.chain.run(
+                lambda m: self.client.messages.create(
+                    **self.request_kwargs(
+                        m, messages, system, tools=tools, tool_choice=tool_choice
+                    )
+                ),
+                max_attempts=self.config.max_retries,
+                base_delay=self.config.retry_base_delay,
+                max_delay=self.config.retry_max_delay,
+            )
+            step.usage = usage_from_response(
+                response, estimate_cost(model, getattr(response, "usage", None))
+            )
+            step.detail["model"] = model
+            step.detail["stop_reason"] = getattr(response, "stop_reason", None)
+        return response

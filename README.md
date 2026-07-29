@@ -31,9 +31,16 @@ python skills/agent-scaffold/scripts/scaffold.py \
 cd analytics_agent && pip install -e '.[dev]' && pytest
 ```
 
-That produces 20 files — ReAct loop, budget config, six-layer guardrail pipeline,
-retry with circuit breaker and model fallback, structured tracing, and 68 tests
-that drive the real loop against a fake model. No API key needed to run them.
+That produces 21 files — the agent loop, budget config, a six-layer guardrail
+pipeline, retry with circuit breaker and model fallback, structured tracing, and
+~70 tests that drive the real loop against a fake model. No API key needed.
+
+`--level` changes the code, not just the docstrings. Levels 0 and 1 are refused
+outright, because a single call and a fixed chain are not agents; `--level 2`
+emits a **router** with no loop and a fixed two-call cost; `--level 3` emits a
+ReAct loop. Both expose the same `Agent` class, so switching is a one-line
+change. A tool whose name contains `sql` is generated with a read-only pattern
+constraint and wired to the SQL guard, rather than a free-text string.
 
 ## Harden an existing agent
 
@@ -51,8 +58,10 @@ get 13 files and 53 tests minimally, or 19 files and 108 tests with everything.
 The tests need only `pytest` and `pydantic`.
 
 CI runs both generators on every push — generating, byte-compiling, and running
-the emitted test suites, the guardrail package in both its minimal and
-fully-armed configurations — so the templates cannot rot silently.
+the emitted test suites. The agent scaffold is built at both levels 2 and 3, with
+assertions that the loop shape actually matches the level; the guardrail package
+is built in both its minimal and fully-armed configurations. The templates cannot
+rot silently.
 
 ## Quick Start
 
